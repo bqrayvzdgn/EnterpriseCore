@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/EnterpriseCore.API/EnterpriseCore.API.csproj" />
+    <Project Path="src/EnterpriseCore.Application/EnterpriseCore.Application.csproj" />
+    <Project Path="src/EnterpriseCore.Domain/EnterpriseCore.Domain.csproj" />
+    <Project Path="src/EnterpriseCore.Infrastructure/EnterpriseCore.Infrastructure.csproj" />
+  </Folder>
+</Solution>
