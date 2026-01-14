@@ -34,6 +34,8 @@ public class ApplicationDbContext : DbContext
     public DbSet<TaskItem> Tasks => Set<TaskItem>();
     public DbSet<TaskComment> TaskComments => Set<TaskComment>();
     public DbSet<ActivityLog> ActivityLogs => Set<ActivityLog>();
+    public DbSet<Attachment> Attachments => Set<Attachment>();
+    public DbSet<Sprint> Sprints => Set<Sprint>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -57,6 +59,8 @@ public class ApplicationDbContext : DbContext
         modelBuilder.Entity<Milestone>().HasQueryFilter(e => !e.IsDeleted && (_currentTenantId == null || e.TenantId == _currentTenantId));
         modelBuilder.Entity<TaskItem>().HasQueryFilter(e => !e.IsDeleted && (_currentTenantId == null || e.TenantId == _currentTenantId));
         modelBuilder.Entity<TaskComment>().HasQueryFilter(e => !e.IsDeleted && (_currentTenantId == null || e.TenantId == _currentTenantId));
+        modelBuilder.Entity<Attachment>().HasQueryFilter(e => !e.IsDeleted && (_currentTenantId == null || e.TenantId == _currentTenantId));
+        modelBuilder.Entity<Sprint>().HasQueryFilter(e => !e.IsDeleted && (_currentTenantId == null || e.TenantId == _currentTenantId));
     }
 
     public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)

@@ -58,12 +58,26 @@ public class RedisCacheService : ICacheService
     public async Task RemoveByPrefixAsync(string prefix, CancellationToken cancellationToken = default)
     {
         var server = _redis.GetServer(_redis.GetEndPoints().First());
-        var keys = server.Keys(pattern: $"{prefix}*");
-
         var db = _redis.GetDatabase();
-        foreach (var key in keys)
+
+        // Use SCAN instead of KEYS for non-blocking iteration
+        var keys = new List<RedisKey>();
+        await foreach (var key in server.KeysAsync(pattern: $"{prefix}*"))
         {
-            await db.KeyDeleteAsync(key);
+            keys.Add(key);
+
+            // Batch delete every 1000 keys for efficiency
+            if (keys.Count >= 1000)
+            {
+                await db.KeyDeleteAsync(keys.ToArray());
+                keys.Clear();
+            }
+        }
+
+        // Delete remaining keys
+        if (keys.Count > 0)
+        {
+            await db.KeyDeleteAsync(keys.ToArray());
         }
     }
 
@@ -71,5 +85,30 @@ public class RedisCacheService : ICacheService
     {
         var data = await _cache.GetAsync(key, cancellationToken);
         return data != null;
+    }
+
+    public async Task<T?> GetOrSetAsync<T>(
+        string key,
+        Func<Task<T>> factory,
+        TimeSpan? expiration = null,
+        CancellationToken cancellationToken = default)
+    {
+        // Try to get from cache
+        var cached = await GetAsync<T>(key, cancellationToken);
+        if (cached != null)
+        {
+            return cached;
+        }
+
+        // Execute factory to get value
+        var value = await factory();
+
+        // Only cache non-null values
+        if (value != null)
+        {
+            await SetAsync(key, value, expiration, cancellationToken);
+        }
+
+        return value;
     }
 }

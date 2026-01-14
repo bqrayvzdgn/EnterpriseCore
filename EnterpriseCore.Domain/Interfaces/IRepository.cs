@@ -13,4 +13,22 @@ public interface IRepository<T> where T : BaseEntity
     Task DeleteAsync(T entity, CancellationToken cancellationToken = default);
     Task<bool> ExistsAsync(Guid id, CancellationToken cancellationToken = default);
     Task<int> CountAsync(Expression<Func<T, bool>>? predicate = null, CancellationToken cancellationToken = default);
+
+    // Pagination support
+    Task<(IReadOnlyList<T> Items, int TotalCount)> GetPagedAsync(
+        int pageNumber,
+        int pageSize,
+        Expression<Func<T, bool>>? predicate = null,
+        Expression<Func<T, object>>? orderBy = null,
+        bool orderDescending = false,
+        CancellationToken cancellationToken = default);
+
+    // IQueryable for complex queries with Include
+    IQueryable<T> Query();
+
+    // Eager loading support
+    Task<T?> GetByIdWithIncludesAsync(
+        Guid id,
+        CancellationToken cancellationToken = default,
+        params Expression<Func<T, object>>[] includes);
 }

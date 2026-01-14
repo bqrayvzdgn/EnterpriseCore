@@ -65,4 +65,60 @@ public class Repository<T> : IRepository<T> where T : BaseEntity
             ? await _dbSet.CountAsync(cancellationToken)
             : await _dbSet.CountAsync(predicate, cancellationToken);
     }
+
+    public virtual async Task<(IReadOnlyList<T> Items, int TotalCount)> GetPagedAsync(
+        int pageNumber,
+        int pageSize,
+        Expression<Func<T, bool>>? predicate = null,
+        Expression<Func<T, object>>? orderBy = null,
+        bool orderDescending = false,
+        CancellationToken cancellationToken = default)
+    {
+        IQueryable<T> query = _dbSet;
+
+        if (predicate != null)
+        {
+            query = query.Where(predicate);
+        }
+
+        var totalCount = await query.CountAsync(cancellationToken);
+
+        if (orderBy != null)
+        {
+            query = orderDescending
+                ? query.OrderByDescending(orderBy)
+                : query.OrderBy(orderBy);
+        }
+        else
+        {
+            query = query.OrderByDescending(e => e.CreatedAt);
+        }
+
+        var items = await query
+            .Skip((pageNumber - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync(cancellationToken);
+
+        return (items, totalCount);
+    }
+
+    public virtual IQueryable<T> Query()
+    {
+        return _dbSet.AsQueryable();
+    }
+
+    public virtual async Task<T?> GetByIdWithIncludesAsync(
+        Guid id,
+        CancellationToken cancellationToken = default,
+        params Expression<Func<T, object>>[] includes)
+    {
+        IQueryable<T> query = _dbSet;
+
+        foreach (var include in includes)
+        {
+            query = query.Include(include);
+        }
+
+        return await query.FirstOrDefaultAsync(e => e.Id == id, cancellationToken);
+    }
 }

@@ -21,12 +21,14 @@ public class TaskItem : BaseEntity, IMultiTenant
     public Guid? AssigneeId { get; set; }
     public Guid? MilestoneId { get; set; }
     public Guid? ParentTaskId { get; set; }
+    public Guid? SprintId { get; set; }
 
     // Navigation properties
     public virtual Project Project { get; set; } = null!;
     public virtual User? Assignee { get; set; }
     public virtual Milestone? Milestone { get; set; }
     public virtual TaskItem? ParentTask { get; set; }
+    public virtual Sprint? Sprint { get; set; }
     public virtual ICollection<TaskItem> SubTasks { get; set; } = new List<TaskItem>();
     public virtual ICollection<TaskComment> Comments { get; set; } = new List<TaskComment>();
 }

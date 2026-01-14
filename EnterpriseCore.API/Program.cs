@@ -1,4 +1,5 @@
 using System.Text;
+using EnterpriseCore.API.Authorization;
 using EnterpriseCore.API.Hubs;
 using EnterpriseCore.API.Middleware;
 using EnterpriseCore.API.Services;
@@ -6,6 +7,7 @@ using EnterpriseCore.Application;
 using EnterpriseCore.Application.Interfaces;
 using EnterpriseCore.Infrastructure;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.IdentityModel.Tokens;
 using Serilog;
 
@@ -68,6 +70,10 @@ builder.Services.AddAuthentication(options =>
 });
 
 builder.Services.AddAuthorization();
+
+// Permission-based authorization
+builder.Services.AddSingleton<IAuthorizationPolicyProvider, PermissionPolicyProvider>();
+builder.Services.AddSingleton<IAuthorizationHandler, PermissionAuthorizationHandler>();
 
 // SignalR
 builder.Services.AddSignalR();
