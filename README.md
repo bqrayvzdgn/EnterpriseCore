@@ -16,11 +16,10 @@ Multi-tenant project management API built with ASP.NET Core 9.0 and Clean Archit
 ## Architecture
 
 ```
-src/
-├── EnterpriseCore.API            # Controllers, Middleware, SignalR Hubs
-├── EnterpriseCore.Application    # DTOs, Validators, Services, Mappings
-├── EnterpriseCore.Domain         # Entities, Enums, Interfaces
-└── EnterpriseCore.Infrastructure # EF Core, Repositories, Caching
+EnterpriseCore.API            # Controllers, Middleware, SignalR Hubs
+EnterpriseCore.Application    # DTOs, Validators, Services, Mappings
+EnterpriseCore.Domain         # Entities, Enums, Interfaces
+EnterpriseCore.Infrastructure # EF Core, Repositories, Caching
 ```
 
 ## Prerequisites
@@ -41,7 +40,7 @@ dotnet build
 
 ### 2. Configure Database
 
-Update connection string in `src/EnterpriseCore.API/appsettings.Development.json`:
+Update connection string in `EnterpriseCore.API/appsettings.Development.json`:
 
 ```json
 {
@@ -54,13 +53,13 @@ Update connection string in `src/EnterpriseCore.API/appsettings.Development.json
 ### 3. Run Migrations
 
 ```bash
-dotnet ef database update --project src/EnterpriseCore.Infrastructure --startup-project src/EnterpriseCore.API
+dotnet ef database update --project EnterpriseCore.Infrastructure --startup-project EnterpriseCore.API
 ```
 
 ### 4. Run the API
 
 ```bash
-dotnet run --project src/EnterpriseCore.API
+dotnet run --project EnterpriseCore.API
 ```
 
 - API: http://localhost:5017
@@ -105,3 +104,112 @@ DELETE /api/tasks/{id}             # Delete task
 ## License
 
 MIT License - see [LICENSE](LICENSE) file.
+
+---
+
+# EnterpriseCore (Türkçe)
+
+ASP.NET Core 9.0 ve Clean Architecture ile geliştirilen çok kiracılı proje yönetim API'si.
+
+## Teknoloji Yığını
+
+| Bileşen | Teknoloji |
+|---------|-----------|
+| Framework | ASP.NET Core 9.0 |
+| Veritabanı | PostgreSQL |
+| ORM | Entity Framework Core 9.0 |
+| Önbellek | Redis |
+| Gerçek Zamanlı | SignalR |
+| Kimlik Doğrulama | JWT + RBAC |
+
+## Mimari
+
+```
+EnterpriseCore.API            # Controller'lar, Middleware, SignalR Hub'ları
+EnterpriseCore.Application    # DTO'lar, Validator'lar, Servisler, Mapping'ler
+EnterpriseCore.Domain         # Entity'ler, Enum'lar, Interface'ler
+EnterpriseCore.Infrastructure # EF Core, Repository'ler, Önbellekleme
+```
+
+## Gereksinimler
+
+- .NET 9.0 SDK
+- PostgreSQL
+- Redis (opsiyonel)
+
+## Başlangıç
+
+### 1. Klonla ve Derle
+
+```bash
+git clone https://github.com/bqrayvzdgn/EnterpriseCore.git
+cd EnterpriseCore
+dotnet build
+```
+
+### 2. Veritabanını Yapılandır
+
+`EnterpriseCore.API/appsettings.Development.json` dosyasındaki bağlantı dizesini güncelle:
+
+```json
+{
+  "ConnectionStrings": {
+    "DefaultConnection": "Host=localhost;Database=EnterpriseCore;Username=postgres;Password=sifreniz"
+  }
+}
+```
+
+### 3. Migration'ları Çalıştır
+
+```bash
+dotnet ef database update --project EnterpriseCore.Infrastructure --startup-project EnterpriseCore.API
+```
+
+### 4. API'yi Çalıştır
+
+```bash
+dotnet run --project EnterpriseCore.API
+```
+
+- API: http://localhost:5017
+- Swagger: http://localhost:5017/swagger
+- Sağlık Kontrolü: http://localhost:5017/health
+
+## API Endpoint'leri
+
+### Kimlik Doğrulama
+```
+POST /api/auth/register    # Kiracı + admin kullanıcı oluştur
+POST /api/auth/login       # JWT token al
+POST /api/auth/refresh     # Token yenile
+```
+
+### Projeler
+```
+GET    /api/projects           # Projeleri listele
+GET    /api/projects/{id}      # Proje detayı
+POST   /api/projects           # Proje oluştur
+PUT    /api/projects/{id}      # Proje güncelle
+DELETE /api/projects/{id}      # Proje sil (soft delete)
+```
+
+### Görevler
+```
+GET    /api/projects/{id}/tasks    # Görevleri listele
+GET    /api/tasks/{id}             # Görev detayı
+POST   /api/projects/{id}/tasks    # Görev oluştur
+PUT    /api/tasks/{id}             # Görev güncelle
+DELETE /api/tasks/{id}             # Görev sil
+```
+
+## Özellikler
+
+- **Çoklu Kiracılık**: Global query filter'lar ile otomatik kiracı izolasyonu
+- **Soft Delete**: Kayıtlar silinmez, silinmiş olarak işaretlenir
+- **Denetim İzi**: Oluşturma/güncelleme/silme zaman damgaları otomatik takibi
+- **RBAC**: İzin tabanlı rol erişim kontrolü
+- **Gerçek Zamanlı**: Canlı güncellemeler için SignalR hub'ı (`/hubs/project`)
+
+## Lisans
+
+MIT Lisansı - [LICENSE](LICENSE) dosyasına bakınız.

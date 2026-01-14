@@ -1,8 +1,6 @@
 <Solution>
-  <Folder Name="/src/">
-    <Project Path="src/EnterpriseCore.API/EnterpriseCore.API.csproj" />
-    <Project Path="src/EnterpriseCore.Application/EnterpriseCore.Application.csproj" />
-    <Project Path="src/EnterpriseCore.Domain/EnterpriseCore.Domain.csproj" />
-    <Project Path="src/EnterpriseCore.Infrastructure/EnterpriseCore.Infrastructure.csproj" />
-  </Folder>
+  <Project Path="EnterpriseCore.API/EnterpriseCore.API.csproj" />
+  <Project Path="EnterpriseCore.Application/EnterpriseCore.Application.csproj" />
+  <Project Path="EnterpriseCore.Domain/EnterpriseCore.Domain.csproj" />
+  <Project Path="EnterpriseCore.Infrastructure/EnterpriseCore.Infrastructure.csproj" />
 </Solution>

@@ -49,3 +49,7 @@ appsettings.*.json
 
 # Temp files
 tmpclaude-*
+
+# Claude Code
+.claude/
+CLAUDE.md

@@ -22,20 +22,30 @@ public static class DependencyInjection
                 configuration.GetConnectionString("DefaultConnection"),
                 b => b.MigrationsAssembly(typeof(ApplicationDbContext).Assembly.FullName)));
 
-        // Redis
+        // Redis (optional - gracefully handle connection failures)
         var redisConnectionString = configuration.GetConnectionString("Redis");
         if (!string.IsNullOrEmpty(redisConnectionString))
         {
-            services.AddSingleton<IConnectionMultiplexer>(
-                ConnectionMultiplexer.Connect(redisConnectionString));
-
-            services.AddStackExchangeRedisCache(options =>
+            try
             {
-                options.Configuration = redisConnectionString;
-                options.InstanceName = "EnterpriseCore:";
-            });
+                var redisOptions = ConfigurationOptions.Parse(redisConnectionString);
+                redisOptions.AbortOnConnectFail = false;
 
-            services.AddScoped<ICacheService, RedisCacheService>();
+                services.AddSingleton<IConnectionMultiplexer>(
+                    ConnectionMultiplexer.Connect(redisOptions));
+
+                services.AddStackExchangeRedisCache(options =>
+                {
+                    options.Configuration = redisConnectionString;
+                    options.InstanceName = "EnterpriseCore:";
+                });
+
+                services.AddScoped<ICacheService, RedisCacheService>();
+            }
+            catch
+            {
+                // Redis not available - continue without caching
+            }
         }
 
         // Repositories
