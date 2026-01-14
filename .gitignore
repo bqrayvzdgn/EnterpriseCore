@@ -53,3 +53,6 @@ tmpclaude-*
 # Claude Code
 .claude/
 CLAUDE.md
+
+# Documentation (auto-generated)
+docs/
