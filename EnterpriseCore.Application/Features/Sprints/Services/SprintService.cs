@@ -111,15 +111,20 @@ public class SprintService : ISprintService
             return Result.Failure<SprintDto>("Cannot update completed or cancelled sprint", "VALIDATION_ERROR");
         }
 
-        if (request.EndDate <= request.StartDate)
+        var newStartDate = request.StartDate ?? sprint.StartDate;
+        var newEndDate = request.EndDate ?? sprint.EndDate;
+
+        if (newEndDate <= newStartDate)
         {
             return Result.Failure<SprintDto>("End date must be after start date", "VALIDATION_ERROR");
         }
 
-        sprint.Name = request.Name;
-        sprint.Goal = request.Goal;
-        sprint.StartDate = request.StartDate;
-        sprint.EndDate = request.EndDate;
+        if (!string.IsNullOrEmpty(request.Name))
+            sprint.Name = request.Name;
+        if (request.Goal != null)
+            sprint.Goal = request.Goal;
+        sprint.StartDate = newStartDate;
+        sprint.EndDate = newEndDate;
 
         await _sprintRepository.UpdateAsync(sprint, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
