@@ -20,6 +20,7 @@ EnterpriseCore.API            # Controllers, Middleware, SignalR Hubs
 EnterpriseCore.Application    # DTOs, Validators, Services, Mappings
 EnterpriseCore.Domain         # Entities, Enums, Interfaces
 EnterpriseCore.Infrastructure # EF Core, Repositories, Caching
+EnterpriseCore.Tests          # Unit Tests (xUnit, FluentAssertions, Moq)
 ```
 
 ## Prerequisites
@@ -38,9 +39,20 @@ cd EnterpriseCore
 dotnet build
 ```
 
-### 2. Configure Database
+### 2. Configure Environment Variables
 
-Update connection string in `EnterpriseCore.API/appsettings.Development.json`:
+Set the following environment variables (recommended for production):
+
+```bash
+# Required
+export DATABASE_CONNECTION_STRING="Host=localhost;Database=EnterpriseCore;Username=postgres;Password=yourpassword"
+export JWT_SECRET_KEY="your-secret-key-min-32-characters"
+
+# Optional
+export REDIS_CONNECTION_STRING="localhost:6379"
+```
+
+Or update `EnterpriseCore.API/appsettings.Development.json` for local development:
 
 ```json
 {
@@ -161,6 +173,25 @@ GET    /api/dashboard/team-workload        # Team workload
 - **Caching**: Redis with fallback to NullCacheService
 - **Real-time**: SignalR hub for live updates (`/hubs/project`)
 
+## Security
+
+- **Security Headers**: HSTS, CSP, X-Frame-Options, X-Content-Type-Options, X-XSS-Protection
+- **Rate Limiting**: Global (100 req/min) and AuthEndpoints (5 req/min) policies
+- **Environment Variables**: Credentials via env vars (no hardcoded secrets)
+- **CORS**: Restricted to configured origins
+
+## Testing
+
+```bash
+# Run all tests
+dotnet test
+
+# Run with coverage
+dotnet test --collect:"XPlat Code Coverage"
+```
+
+58 unit tests covering validators and core patterns.
+
 ## License
 
 MIT License - see [LICENSE](LICENSE) file.
@@ -189,6 +220,7 @@ EnterpriseCore.API            # Controller'lar, Middleware, SignalR Hub'ları
 EnterpriseCore.Application    # DTO'lar, Validator'lar, Servisler, Mapping'ler
 EnterpriseCore.Domain         # Entity'ler, Enum'lar, Interface'ler
 EnterpriseCore.Infrastructure # EF Core, Repository'ler, Önbellekleme
+EnterpriseCore.Tests          # Birim Testler (xUnit, FluentAssertions, Moq)
 ```
 
 ## Gereksinimler
@@ -207,9 +239,20 @@ cd EnterpriseCore
 dotnet build
 ```
 
-### 2. Veritabanını Yapılandır
+### 2. Ortam Değişkenlerini Yapılandır
 
-`EnterpriseCore.API/appsettings.Development.json` dosyasındaki bağlantı dizesini güncelle:
+Aşağıdaki ortam değişkenlerini ayarla (production için önerilir):
+
+```bash
+# Zorunlu
+export DATABASE_CONNECTION_STRING="Host=localhost;Database=EnterpriseCore;Username=postgres;Password=sifreniz"
+export JWT_SECRET_KEY="en-az-32-karakterlik-gizli-anahtar"
+
+# Opsiyonel
+export REDIS_CONNECTION_STRING="localhost:6379"
+```
+
+Veya yerel geliştirme için `EnterpriseCore.API/appsettings.Development.json` dosyasını güncelle:
 
 ```json
 {
@@ -329,6 +372,25 @@ GET    /api/dashboard/team-workload        # Ekip iş yükü
 - **Dashboard**: Analitik, raporlar ve ekip iş yükü istatistikleri
 - **Önbellekleme**: NullCacheService fallback ile Redis
 - **Gerçek Zamanlı**: Canlı güncellemeler için SignalR hub'ı (`/hubs/project`)
+
+## Güvenlik
+
+- **Güvenlik Header'ları**: HSTS, CSP, X-Frame-Options, X-Content-Type-Options, X-XSS-Protection
+- **Rate Limiting**: Global (100 istek/dk) ve AuthEndpoints (5 istek/dk) politikaları
+- **Ortam Değişkenleri**: Kimlik bilgileri env var ile (hardcoded secret yok)
+- **CORS**: Yapılandırılmış origin'lerle kısıtlı
+
+## Test
+
+```bash
+# Tüm testleri çalıştır
+dotnet test
+
+# Kapsam ile çalıştır
+dotnet test --collect:"XPlat Code Coverage"
+```
+
+Validator'lar ve temel pattern'leri kapsayan 58 birim test.
 
 ## Lisans
 

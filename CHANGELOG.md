@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-01-15
+
+### Added
+
+- **Security Improvements**:
+  - SecurityHeadersMiddleware (X-Content-Type-Options, X-Frame-Options, HSTS, CSP, X-XSS-Protection, Referrer-Policy, Permissions-Policy)
+  - Rate limiting with global limit (100 req/min) and AuthEndpoints policy (5 req/min)
+  - Environment variable support for credentials (JWT_SECRET_KEY, DATABASE_CONNECTION_STRING)
+  - SignalR ProjectHub authorization with project access verification
+- **Test Project**: EnterpriseCore.Tests with 58 unit tests
+  - Validator tests (ResetPassword, ActivityLogQuery, UploadAttachment)
+  - Result pattern tests
+  - Test fixtures (TestDataFactory, MockCurrentUserService)
+- **New Validators**: 5 new request validators
+  - RefreshTokenRequestValidator
+  - ForgotPasswordRequestValidator
+  - ResetPasswordRequestValidator
+  - ActivityLogQueryRequestValidator
+  - UploadAttachmentRequestValidator
+- **Swagger Documentation**: ProducesResponseType attributes on all controllers
+- **XML Documentation**: Interface documentation for IAuthService, IProjectService, ITaskService, IUserService, IRoleService, ICacheService
+
+### Changed
+
+- CORS restricted to configured origins (no longer AllowAll)
+- TokenService catch block now logs exceptions properly
+- ICacheService moved from Infrastructure to Application layer (Clean Architecture)
+- Role entity now has proper tenant filter in ApplicationDbContext
+
+### Fixed
+
+- N+1 query issues in DashboardService (server-side aggregation)
+- Permissions caching with ICacheService
+
+### Security
+
+- Removed hardcoded credentials from appsettings
+- Added rate limiting to prevent brute force attacks
+- Added security headers for XSS, clickjacking, and content-type sniffing protection
+
 ## [0.3.0] - 2026-01-14
 
 ### Added
@@ -89,6 +129,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Bu projede yapılan önemli değişiklikler bu dosyada belgelenecektir.
 
 ## [Yayınlanmamış]
+
+## [0.4.0] - 2026-01-15
+
+### Eklendi
+
+- **Güvenlik İyileştirmeleri**:
+  - SecurityHeadersMiddleware (X-Content-Type-Options, X-Frame-Options, HSTS, CSP, X-XSS-Protection, Referrer-Policy, Permissions-Policy)
+  - Global limit (100 istek/dk) ve AuthEndpoints politikası (5 istek/dk) ile rate limiting
+  - Kimlik bilgileri için ortam değişkeni desteği (JWT_SECRET_KEY, DATABASE_CONNECTION_STRING)
+  - Proje erişim doğrulaması ile SignalR ProjectHub yetkilendirmesi
+- **Test Projesi**: 58 birim testiyle EnterpriseCore.Tests
+  - Validator testleri (ResetPassword, ActivityLogQuery, UploadAttachment)
+  - Result pattern testleri
+  - Test fixture'ları (TestDataFactory, MockCurrentUserService)
+- **Yeni Validator'lar**: 5 yeni istek validator'ı
+  - RefreshTokenRequestValidator
+  - ForgotPasswordRequestValidator
+  - ResetPasswordRequestValidator
+  - ActivityLogQueryRequestValidator
+  - UploadAttachmentRequestValidator
+- **Swagger Dokümantasyonu**: Tüm controller'larda ProducesResponseType attribute'ları
+- **XML Dokümantasyonu**: IAuthService, IProjectService, ITaskService, IUserService, IRoleService, ICacheService interface dokümantasyonu
+
+### Değiştirildi
+
+- CORS yapılandırılmış origin'lerle kısıtlandı (artık AllowAll değil)
+- TokenService catch bloğu artık exception'ları düzgün logluyor
+- ICacheService Infrastructure'dan Application katmanına taşındı (Clean Architecture)
+- Role entity'si artık ApplicationDbContext'te düzgün tenant filtresine sahip
+
+### Düzeltildi
+
+- DashboardService'teki N+1 sorgu sorunları (sunucu tarafı agregasyon)
+- ICacheService ile izin önbellekleme
+
+### Güvenlik
+
+- appsettings'ten hardcoded kimlik bilgileri kaldırıldı
+- Brute force saldırılarını önlemek için rate limiting eklendi
+- XSS, clickjacking ve content-type sniffing koruması için güvenlik header'ları eklendi
 
 ## [0.3.0] - 2026-01-14
 
