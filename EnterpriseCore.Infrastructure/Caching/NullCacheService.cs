@@ -1,3 +1,5 @@
+using EnterpriseCore.Application.Interfaces;
+
 namespace EnterpriseCore.Infrastructure.Caching;
 
 /// <summary>

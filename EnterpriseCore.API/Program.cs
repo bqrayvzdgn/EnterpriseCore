@@ -1,4 +1,5 @@
 using System.Text;
+using System.Threading.RateLimiting;
 using EnterpriseCore.API.Authorization;
 using EnterpriseCore.API.Hubs;
 using EnterpriseCore.API.Middleware;
@@ -8,6 +9,7 @@ using EnterpriseCore.Application.Interfaces;
 using EnterpriseCore.Infrastructure;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.IdentityModel.Tokens;
 using Serilog;
 
@@ -32,7 +34,15 @@ builder.Services.AddControllers();
 
 // JWT Authentication
 var jwtSettings = builder.Configuration.GetSection("JwtSettings");
-var secretKey = jwtSettings["SecretKey"] ?? "YourSuperSecretKeyThatIsAtLeast32CharactersLong!";
+var secretKey = jwtSettings["SecretKey"];
+if (string.IsNullOrEmpty(secretKey))
+{
+    secretKey = Environment.GetEnvironmentVariable("JWT_SECRET_KEY");
+}
+if (string.IsNullOrEmpty(secretKey))
+{
+    throw new InvalidOperationException("JWT SecretKey is not configured. Set it in appsettings.json or JWT_SECRET_KEY environment variable.");
+}
 
 builder.Services.AddAuthentication(options =>
 {
@@ -78,15 +88,48 @@ builder.Services.AddSingleton<IAuthorizationHandler, PermissionAuthorizationHand
 // SignalR
 builder.Services.AddSignalR();
 
-// CORS
+// CORS - Restricted to configured origins
+var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>()
+    ?? new[] { "https://localhost:7140", "http://localhost:5017" };
+
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("AllowAll", policy =>
+    options.AddPolicy("Default", policy =>
     {
-        policy.AllowAnyOrigin()
+        policy.WithOrigins(allowedOrigins)
             .AllowAnyMethod()
-            .AllowAnyHeader();
+            .AllowAnyHeader()
+            .AllowCredentials();
     });
+});
+
+// Rate Limiting
+var rateLimitSettings = builder.Configuration.GetSection("RateLimiting");
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+
+    // Global rate limit
+    options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(context =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: context.User?.Identity?.Name ?? context.Connection.RemoteIpAddress?.ToString() ?? "anonymous",
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                AutoReplenishment = true,
+                PermitLimit = rateLimitSettings.GetValue<int>("GlobalPermitLimit", 100),
+                Window = TimeSpan.FromMinutes(rateLimitSettings.GetValue<int>("GlobalWindowMinutes", 1))
+            }));
+
+    // Strict rate limit for auth endpoints
+    options.AddPolicy("AuthEndpoints", context =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                AutoReplenishment = true,
+                PermitLimit = rateLimitSettings.GetValue<int>("AuthPermitLimit", 5),
+                Window = TimeSpan.FromMinutes(rateLimitSettings.GetValue<int>("AuthWindowMinutes", 1))
+            }));
 });
 
 // Swagger/OpenAPI
@@ -97,6 +140,7 @@ var app = builder.Build();
 
 // Middleware
 app.UseExceptionHandling();
+app.UseSecurityHeaders();
 app.UseSerilogRequestLogging();
 
 // Swagger (dev only)
@@ -107,7 +151,8 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
-app.UseCors("AllowAll");
+app.UseCors("Default");
+app.UseRateLimiter();
 
 app.UseAuthentication();
 app.UseAuthorization();

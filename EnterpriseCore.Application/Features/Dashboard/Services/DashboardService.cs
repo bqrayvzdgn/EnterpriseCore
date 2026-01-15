@@ -35,23 +35,44 @@ public class DashboardService : IDashboardService
 
     public async Task<Result<DashboardSummaryDto>> GetSummaryAsync(CancellationToken cancellationToken = default)
     {
-        var projects = await _projectRepository.Query().ToListAsync(cancellationToken);
-        var tasks = await _taskRepository.Query().ToListAsync(cancellationToken);
-        var users = await _userRepository.Query().Where(u => u.IsActive).CountAsync(cancellationToken);
-        var activeSprints = await _sprintRepository.Query()
-            .CountAsync(s => s.Status == SprintStatus.Active, cancellationToken);
+        // Server-side aggregation for projects
+        var projectStats = await _projectRepository.Query()
+            .GroupBy(p => 1)
+            .Select(g => new
+            {
+                Total = g.Count(),
+                Active = g.Count(p => p.Status == ProjectStatus.Active)
+            })
+            .FirstOrDefaultAsync(cancellationToken);
 
-        var tasksByStatus = tasks
+        // Server-side aggregation for tasks
+        var taskStats = await _taskRepository.Query()
+            .GroupBy(t => 1)
+            .Select(g => new
+            {
+                Total = g.Count(),
+                Completed = g.Count(t => t.Status == TaskItemStatus.Done),
+                Overdue = g.Count(t => t.DueDate.HasValue && t.DueDate < DateTime.UtcNow && t.Status != TaskItemStatus.Done)
+            })
+            .FirstOrDefaultAsync(cancellationToken);
+
+        // Tasks by status - server-side grouping
+        var tasksByStatus = await _taskRepository.Query()
             .GroupBy(t => t.Status)
             .Select(g => new TaskStatusCountDto
             {
                 Status = g.Key.ToString(),
                 Count = g.Count()
             })
-            .ToList();
+            .ToListAsync(cancellationToken);
 
+        var users = await _userRepository.Query().CountAsync(u => u.IsActive, cancellationToken);
+        var activeSprints = await _sprintRepository.Query()
+            .CountAsync(s => s.Status == SprintStatus.Active, cancellationToken);
+
+        // Recent activities with projection
         var recentActivities = await _dbContext.Set<ActivityLog>()
-            .Include(a => a.User)
+            .AsNoTracking()
             .OrderByDescending(a => a.CreatedAt)
             .Take(10)
             .Select(a => new RecentActivityDto
@@ -59,18 +80,18 @@ public class DashboardService : IDashboardService
                 Action = a.Action,
                 EntityType = a.EntityType,
                 EntityId = a.EntityId,
-                UserName = a.User != null ? $"{a.User.FirstName} {a.User.LastName}" : null,
+                UserName = a.User != null ? a.User.FirstName + " " + a.User.LastName : null,
                 CreatedAt = a.CreatedAt
             })
             .ToListAsync(cancellationToken);
 
         var summary = new DashboardSummaryDto
         {
-            TotalProjects = projects.Count,
-            ActiveProjects = projects.Count(p => p.Status == ProjectStatus.Active),
-            TotalTasks = tasks.Count,
-            CompletedTasks = tasks.Count(t => t.Status == TaskItemStatus.Done),
-            OverdueTasks = tasks.Count(t => t.DueDate.HasValue && t.DueDate < DateTime.UtcNow && t.Status != TaskItemStatus.Done),
+            TotalProjects = projectStats?.Total ?? 0,
+            ActiveProjects = projectStats?.Active ?? 0,
+            TotalTasks = taskStats?.Total ?? 0,
+            CompletedTasks = taskStats?.Completed ?? 0,
+            OverdueTasks = taskStats?.Overdue ?? 0,
             TotalUsers = users,
             ActiveSprints = activeSprints,
             TasksByStatus = tasksByStatus,
@@ -84,6 +105,7 @@ public class DashboardService : IDashboardService
         Guid projectId, CancellationToken cancellationToken = default)
     {
         var project = await _projectRepository.Query()
+            .AsNoTracking()
             .Include(p => p.Owner)
             .FirstOrDefaultAsync(p => p.Id == projectId, cancellationToken);
 
@@ -92,44 +114,88 @@ public class DashboardService : IDashboardService
             return Result.Failure<ProjectReportDto>("Project not found", "NOT_FOUND");
         }
 
-        var tasks = await _taskRepository.Query()
-            .Include(t => t.Assignee)
+        // Get task statistics in a single query
+        var taskStats = await _taskRepository.Query()
             .Where(t => t.ProjectId == projectId)
-            .ToListAsync(cancellationToken);
+            .GroupBy(t => 1)
+            .Select(g => new
+            {
+                Total = g.Count(),
+                Completed = g.Count(t => t.Status == TaskItemStatus.Done),
+                InProgress = g.Count(t => t.Status == TaskItemStatus.InProgress),
+                Todo = g.Count(t => t.Status == TaskItemStatus.Todo),
+                TotalEstimatedHours = g.Sum(t => t.EstimatedHours ?? 0),
+                TotalActualHours = g.Sum(t => t.ActualHours ?? 0)
+            })
+            .FirstOrDefaultAsync(cancellationToken);
 
-        var members = await _dbContext.Set<ProjectMember>()
-            .Include(pm => pm.User)
+        // Get member workloads with server-side aggregation
+        var memberWorkloads = await _dbContext.Set<ProjectMember>()
+            .AsNoTracking()
             .Where(pm => pm.ProjectId == projectId)
+            .Select(pm => new
+            {
+                pm.UserId,
+                UserName = pm.User.FirstName + " " + pm.User.LastName
+            })
+            .Join(
+                _taskRepository.Query()
+                    .Where(t => t.ProjectId == projectId)
+                    .GroupBy(t => t.AssigneeId)
+                    .Select(g => new
+                    {
+                        AssigneeId = g.Key,
+                        AssignedTasks = g.Count(),
+                        CompletedTasks = g.Count(t => t.Status == TaskItemStatus.Done),
+                        InProgressTasks = g.Count(t => t.Status == TaskItemStatus.InProgress)
+                    }),
+                pm => pm.UserId,
+                t => t.AssigneeId,
+                (pm, t) => new MemberWorkloadDto
+                {
+                    UserId = pm.UserId,
+                    UserName = pm.UserName,
+                    AssignedTasks = t.AssignedTasks,
+                    CompletedTasks = t.CompletedTasks,
+                    InProgressTasks = t.InProgressTasks
+                })
             .ToListAsync(cancellationToken);
 
-        var sprints = await _sprintRepository.Query()
-            .Include(s => s.Tasks)
+        // Get members without tasks
+        var membersWithoutTasks = await _dbContext.Set<ProjectMember>()
+            .AsNoTracking()
+            .Where(pm => pm.ProjectId == projectId && !memberWorkloads.Select(m => m.UserId).Contains(pm.UserId))
+            .Select(pm => new MemberWorkloadDto
+            {
+                UserId = pm.UserId,
+                UserName = pm.User.FirstName + " " + pm.User.LastName,
+                AssignedTasks = 0,
+                CompletedTasks = 0,
+                InProgressTasks = 0
+            })
+            .ToListAsync(cancellationToken);
+
+        memberWorkloads.AddRange(membersWithoutTasks);
+
+        // Get sprint summaries
+        var sprintSummaries = await _sprintRepository.Query()
+            .AsNoTracking()
             .Where(s => s.ProjectId == projectId)
             .OrderByDescending(s => s.StartDate)
+            .Select(s => new SprintSummaryDto
+            {
+                Id = s.Id,
+                Name = s.Name,
+                Status = s.Status.ToString(),
+                TotalTasks = s.Tasks != null ? s.Tasks.Count : 0,
+                CompletedTasks = s.Tasks != null ? s.Tasks.Count(t => t.Status == TaskItemStatus.Done) : 0,
+                StartDate = s.StartDate,
+                EndDate = s.EndDate
+            })
             .ToListAsync(cancellationToken);
 
-        var memberWorkloads = members.Select(m => new MemberWorkloadDto
-        {
-            UserId = m.UserId,
-            UserName = $"{m.User.FirstName} {m.User.LastName}",
-            AssignedTasks = tasks.Count(t => t.AssigneeId == m.UserId),
-            CompletedTasks = tasks.Count(t => t.AssigneeId == m.UserId && t.Status == TaskItemStatus.Done),
-            InProgressTasks = tasks.Count(t => t.AssigneeId == m.UserId && t.Status == TaskItemStatus.InProgress)
-        }).ToList();
-
-        var sprintSummaries = sprints.Select(s => new SprintSummaryDto
-        {
-            Id = s.Id,
-            Name = s.Name,
-            Status = s.Status.ToString(),
-            TotalTasks = s.Tasks?.Count ?? 0,
-            CompletedTasks = s.Tasks?.Count(t => t.Status == TaskItemStatus.Done) ?? 0,
-            StartDate = s.StartDate,
-            EndDate = s.EndDate
-        }).ToList();
-
-        var completedTasks = tasks.Count(t => t.Status == TaskItemStatus.Done);
-        var totalTasks = tasks.Count;
+        var totalTasks = taskStats?.Total ?? 0;
+        var completedTasks = taskStats?.Completed ?? 0;
 
         var report = new ProjectReportDto
         {
@@ -138,13 +204,13 @@ public class DashboardService : IDashboardService
             Status = project.Status.ToString(),
             TotalTasks = totalTasks,
             CompletedTasks = completedTasks,
-            InProgressTasks = tasks.Count(t => t.Status == TaskItemStatus.InProgress),
-            TodoTasks = tasks.Count(t => t.Status == TaskItemStatus.Todo),
+            InProgressTasks = taskStats?.InProgress ?? 0,
+            TodoTasks = taskStats?.Todo ?? 0,
             CompletionPercentage = totalTasks > 0 ? Math.Round((decimal)completedTasks / totalTasks * 100, 2) : 0,
-            TotalMembers = members.Count,
+            TotalMembers = memberWorkloads.Count,
             Budget = project.Budget,
-            TotalEstimatedHours = tasks.Where(t => t.EstimatedHours.HasValue).Sum(t => t.EstimatedHours),
-            TotalActualHours = tasks.Where(t => t.ActualHours.HasValue).Sum(t => t.ActualHours),
+            TotalEstimatedHours = taskStats?.TotalEstimatedHours,
+            TotalActualHours = taskStats?.TotalActualHours,
             Sprints = sprintSummaries,
             MemberWorkloads = memberWorkloads
         };
@@ -160,10 +226,19 @@ public class DashboardService : IDashboardService
             return Result.Failure<MyStatsDto>("User not authenticated", "UNAUTHORIZED");
         }
 
-        var myTasks = await _taskRepository.Query()
-            .Include(t => t.Project)
+        // Get task statistics in a single query
+        var taskStats = await _taskRepository.Query()
             .Where(t => t.AssigneeId == userId.Value)
-            .ToListAsync(cancellationToken);
+            .GroupBy(t => 1)
+            .Select(g => new
+            {
+                Total = g.Count(),
+                Completed = g.Count(t => t.Status == TaskItemStatus.Done),
+                InProgress = g.Count(t => t.Status == TaskItemStatus.InProgress),
+                Overdue = g.Count(t => t.DueDate.HasValue && t.DueDate < DateTime.UtcNow && t.Status != TaskItemStatus.Done),
+                TotalLoggedHours = g.Sum(t => t.ActualHours ?? 0)
+            })
+            .FirstOrDefaultAsync(cancellationToken);
 
         var myProjects = await _dbContext.Set<ProjectMember>()
             .Where(pm => pm.UserId == userId.Value)
@@ -171,37 +246,41 @@ public class DashboardService : IDashboardService
             .Distinct()
             .CountAsync(cancellationToken);
 
-        var tasksByPriority = myTasks
+        // Tasks by priority - server-side grouping
+        var tasksByPriority = await _taskRepository.Query()
+            .Where(t => t.AssigneeId == userId.Value)
             .GroupBy(t => t.Priority)
             .Select(g => new TaskStatusCountDto
             {
                 Status = g.Key.ToString(),
                 Count = g.Count()
             })
-            .ToList();
+            .ToListAsync(cancellationToken);
 
-        var upcomingTasks = myTasks
-            .Where(t => t.DueDate.HasValue && t.DueDate > DateTime.UtcNow && t.Status != TaskItemStatus.Done)
+        // Upcoming tasks with projection
+        var upcomingTasks = await _taskRepository.Query()
+            .AsNoTracking()
+            .Where(t => t.AssigneeId == userId.Value && t.DueDate.HasValue && t.DueDate > DateTime.UtcNow && t.Status != TaskItemStatus.Done)
             .OrderBy(t => t.DueDate)
             .Take(5)
             .Select(t => new UpcomingTaskDto
             {
                 Id = t.Id,
                 Title = t.Title,
-                ProjectName = t.Project?.Name ?? string.Empty,
+                ProjectName = t.Project != null ? t.Project.Name : string.Empty,
                 DueDate = t.DueDate,
                 Priority = t.Priority.ToString()
             })
-            .ToList();
+            .ToListAsync(cancellationToken);
 
         var stats = new MyStatsDto
         {
-            TotalAssignedTasks = myTasks.Count,
-            CompletedTasks = myTasks.Count(t => t.Status == TaskItemStatus.Done),
-            InProgressTasks = myTasks.Count(t => t.Status == TaskItemStatus.InProgress),
-            OverdueTasks = myTasks.Count(t => t.DueDate.HasValue && t.DueDate < DateTime.UtcNow && t.Status != TaskItemStatus.Done),
+            TotalAssignedTasks = taskStats?.Total ?? 0,
+            CompletedTasks = taskStats?.Completed ?? 0,
+            InProgressTasks = taskStats?.InProgress ?? 0,
+            OverdueTasks = taskStats?.Overdue ?? 0,
             ProjectsCount = myProjects,
-            TotalLoggedHours = myTasks.Where(t => t.ActualHours.HasValue).Sum(t => t.ActualHours),
+            TotalLoggedHours = taskStats?.TotalLoggedHours,
             TasksByPriority = tasksByPriority,
             UpcomingTasks = upcomingTasks
         };
@@ -211,31 +290,50 @@ public class DashboardService : IDashboardService
 
     public async Task<Result<TeamWorkloadDto>> GetTeamWorkloadAsync(CancellationToken cancellationToken = default)
     {
-        var tasks = await _taskRepository.Query()
-            .Include(t => t.Assignee)
+        // Get task counts per assignee in a single query
+        var tasksByAssignee = await _taskRepository.Query()
+            .Where(t => t.AssigneeId != null)
+            .GroupBy(t => t.AssigneeId)
+            .Select(g => new
+            {
+                AssigneeId = g.Key,
+                AssignedTasks = g.Count(),
+                CompletedTasks = g.Count(t => t.Status == TaskItemStatus.Done),
+                InProgressTasks = g.Count(t => t.Status == TaskItemStatus.InProgress)
+            })
             .ToListAsync(cancellationToken);
 
-        var users = await _userRepository.Query()
-            .Where(u => u.IsActive)
-            .ToListAsync(cancellationToken);
+        var assigneeIds = tasksByAssignee.Select(t => t.AssigneeId).ToList();
 
-        var memberWorkloads = users.Select(u => new MemberWorkloadDto
-        {
-            UserId = u.Id,
-            UserName = $"{u.FirstName} {u.LastName}",
-            AssignedTasks = tasks.Count(t => t.AssigneeId == u.Id),
-            CompletedTasks = tasks.Count(t => t.AssigneeId == u.Id && t.Status == TaskItemStatus.Done),
-            InProgressTasks = tasks.Count(t => t.AssigneeId == u.Id && t.Status == TaskItemStatus.InProgress)
-        })
-        .Where(m => m.AssignedTasks > 0)
-        .OrderByDescending(m => m.AssignedTasks)
-        .ToList();
+        // Get user names for assignees
+        var userNames = await _userRepository.Query()
+            .AsNoTracking()
+            .Where(u => assigneeIds.Contains(u.Id))
+            .Select(u => new { u.Id, FullName = u.FirstName + " " + u.LastName })
+            .ToDictionaryAsync(u => u.Id, u => u.FullName, cancellationToken);
+
+        var memberWorkloads = tasksByAssignee
+            .Where(t => t.AssigneeId.HasValue)
+            .Select(t => new MemberWorkloadDto
+            {
+                UserId = t.AssigneeId!.Value,
+                UserName = userNames.GetValueOrDefault(t.AssigneeId.Value, "Unknown"),
+                AssignedTasks = t.AssignedTasks,
+                CompletedTasks = t.CompletedTasks,
+                InProgressTasks = t.InProgressTasks
+            })
+            .OrderByDescending(m => m.AssignedTasks)
+            .ToList();
+
+        // Get total and unassigned task counts
+        var totalTasks = await _taskRepository.Query().CountAsync(cancellationToken);
+        var unassignedTasks = await _taskRepository.Query().CountAsync(t => t.AssigneeId == null, cancellationToken);
 
         var workload = new TeamWorkloadDto
         {
             Members = memberWorkloads,
-            TotalTasks = tasks.Count,
-            UnassignedTasks = tasks.Count(t => t.AssigneeId == null)
+            TotalTasks = totalTasks,
+            UnassignedTasks = unassignedTasks
         };
 
         return Result.Success(workload);

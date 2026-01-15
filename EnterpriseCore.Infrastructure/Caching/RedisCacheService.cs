@@ -1,4 +1,5 @@
 using System.Text.Json;
+using EnterpriseCore.Application.Interfaces;
 using Microsoft.Extensions.Caching.Distributed;
 using StackExchange.Redis;
 

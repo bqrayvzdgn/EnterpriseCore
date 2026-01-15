@@ -7,6 +7,10 @@ using Microsoft.AspNetCore.Mvc;
 namespace EnterpriseCore.API.Controllers;
 
 [Authorize]
+[ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+[ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
+[ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
+[ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status500InternalServerError)]
 public class ProjectsController : BaseController
 {
     private readonly IProjectService _projectService;
@@ -20,6 +24,7 @@ public class ProjectsController : BaseController
     /// Get all projects (paginated)
     /// </summary>
     [HttpGet]
+    [ProducesResponseType(typeof(PagedResult<ProjectDto>), StatusCodes.Status200OK)]
     public async Task<IActionResult> GetProjects([FromQuery] PagedRequest request, CancellationToken cancellationToken)
     {
         var result = await _projectService.GetProjectsAsync(request, cancellationToken);
@@ -30,6 +35,8 @@ public class ProjectsController : BaseController
     /// Get project by ID
     /// </summary>
     [HttpGet("{id:guid}")]
+    [ProducesResponseType(typeof(ProjectDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
     public async Task<IActionResult> GetProject(Guid id, CancellationToken cancellationToken)
     {
         var result = await _projectService.GetProjectByIdAsync(id, cancellationToken);
@@ -40,6 +47,7 @@ public class ProjectsController : BaseController
     /// Create a new project
     /// </summary>
     [HttpPost]
+    [ProducesResponseType(typeof(ProjectDto), StatusCodes.Status200OK)]
     public async Task<IActionResult> CreateProject([FromBody] CreateProjectRequest request, CancellationToken cancellationToken)
     {
         var result = await _projectService.CreateProjectAsync(request, cancellationToken);
@@ -50,6 +58,8 @@ public class ProjectsController : BaseController
     /// Update a project
     /// </summary>
     [HttpPut("{id:guid}")]
+    [ProducesResponseType(typeof(ProjectDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
     public async Task<IActionResult> UpdateProject(Guid id, [FromBody] UpdateProjectRequest request, CancellationToken cancellationToken)
     {
         var result = await _projectService.UpdateProjectAsync(id, request, cancellationToken);
@@ -60,6 +70,8 @@ public class ProjectsController : BaseController
     /// Delete a project (soft delete)
     /// </summary>
     [HttpDelete("{id:guid}")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
     public async Task<IActionResult> DeleteProject(Guid id, CancellationToken cancellationToken)
     {
         var result = await _projectService.DeleteProjectAsync(id, cancellationToken);
@@ -70,6 +82,8 @@ public class ProjectsController : BaseController
     /// Get project statistics
     /// </summary>
     [HttpGet("{id:guid}/stats")]
+    [ProducesResponseType(typeof(ProjectStatsDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
     public async Task<IActionResult> GetProjectStats(Guid id, CancellationToken cancellationToken)
     {
         var result = await _projectService.GetProjectStatsAsync(id, cancellationToken);
@@ -80,6 +94,8 @@ public class ProjectsController : BaseController
     /// Add a member to project
     /// </summary>
     [HttpPost("{id:guid}/members")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
     public async Task<IActionResult> AddMember(Guid id, [FromBody] AddProjectMemberRequest request, CancellationToken cancellationToken)
     {
         var result = await _projectService.AddMemberAsync(id, request, cancellationToken);
@@ -90,6 +106,8 @@ public class ProjectsController : BaseController
     /// Remove a member from project
     /// </summary>
     [HttpDelete("{id:guid}/members/{userId:guid}")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
     public async Task<IActionResult> RemoveMember(Guid id, Guid userId, CancellationToken cancellationToken)
     {
         var result = await _projectService.RemoveMemberAsync(id, userId, cancellationToken);

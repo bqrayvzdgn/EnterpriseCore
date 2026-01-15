@@ -53,7 +53,7 @@ public class ApplicationDbContext : DbContext
         // Soft delete filter for BaseEntity types
         modelBuilder.Entity<Tenant>().HasQueryFilter(e => !e.IsDeleted);
         modelBuilder.Entity<User>().HasQueryFilter(e => !e.IsDeleted && (_currentTenantId == null || e.TenantId == _currentTenantId));
-        modelBuilder.Entity<Role>().HasQueryFilter(e => !e.IsDeleted);
+        modelBuilder.Entity<Role>().HasQueryFilter(e => !e.IsDeleted && (e.TenantId == null || _currentTenantId == null || e.TenantId == _currentTenantId));
         modelBuilder.Entity<Permission>().HasQueryFilter(e => !e.IsDeleted);
         modelBuilder.Entity<Project>().HasQueryFilter(e => !e.IsDeleted && (_currentTenantId == null || e.TenantId == _currentTenantId));
         modelBuilder.Entity<Milestone>().HasQueryFilter(e => !e.IsDeleted && (_currentTenantId == null || e.TenantId == _currentTenantId));

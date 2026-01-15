@@ -1,3 +1,5 @@
+using EnterpriseCore.Domain.Entities;
+using EnterpriseCore.Domain.Interfaces;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
 
@@ -7,10 +9,12 @@ namespace EnterpriseCore.API.Hubs;
 public class ProjectHub : Hub
 {
     private readonly ILogger<ProjectHub> _logger;
+    private readonly IRepository<Project> _projectRepository;
 
-    public ProjectHub(ILogger<ProjectHub> logger)
+    public ProjectHub(ILogger<ProjectHub> logger, IRepository<Project> projectRepository)
     {
         _logger = logger;
+        _projectRepository = projectRepository;
     }
 
     public override async Task OnConnectedAsync()
@@ -39,12 +43,22 @@ public class ProjectHub : Hub
 
     public async Task JoinProject(Guid projectId)
     {
+        // Verify user has access to this project (global tenant filter ensures only tenant's projects are visible)
+        var projectExists = await _projectRepository.ExistsAsync(projectId);
+        if (!projectExists)
+        {
+            _logger.LogWarning("Client {ConnectionId} attempted to join non-existent or unauthorized project {ProjectId}",
+                Context.ConnectionId, projectId);
+            throw new HubException("Project not found or access denied.");
+        }
+
         await Groups.AddToGroupAsync(Context.ConnectionId, $"project:{projectId}");
         _logger.LogInformation("Client {ConnectionId} joined project group {ProjectId}", Context.ConnectionId, projectId);
     }
 
     public async Task LeaveProject(Guid projectId)
     {
+        // No need to verify access for leaving - just remove from group
         await Groups.RemoveFromGroupAsync(Context.ConnectionId, $"project:{projectId}");
         _logger.LogInformation("Client {ConnectionId} left project group {ProjectId}", Context.ConnectionId, projectId);
     }

@@ -11,10 +11,12 @@ namespace EnterpriseCore.API.Services;
 public class TokenService : ITokenService
 {
     private readonly IConfiguration _configuration;
+    private readonly ILogger<TokenService> _logger;
 
-    public TokenService(IConfiguration configuration)
+    public TokenService(IConfiguration configuration, ILogger<TokenService> logger)
     {
         _configuration = configuration;
+        _logger = logger;
     }
 
     public string GenerateAccessToken(User user, IEnumerable<string> permissions)
@@ -91,9 +93,9 @@ public class TokenService : ITokenService
                 return (Guid.Parse(userId), Guid.Parse(tenantId));
             }
         }
-        catch
+        catch (Exception ex)
         {
-            // Token validation failed
+            _logger.LogWarning(ex, "Token validation failed for provided token");
         }
 
         return null;

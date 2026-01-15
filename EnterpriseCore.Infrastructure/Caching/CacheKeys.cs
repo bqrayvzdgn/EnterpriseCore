@@ -20,6 +20,11 @@ public static class CacheKeys
     // Role-related cache keys
     public static string Role(Guid roleId) => $"role:{roleId}";
     public static string RolePermissions(Guid roleId) => $"role:permissions:{roleId}";
+    public static string TenantRoles(Guid tenantId) => $"roles:tenant:{tenantId}";
+    public static string SystemRoles => "roles:system";
+
+    // Permission-related cache keys
+    public static string AllPermissions => "permissions:all";
 
     // Prefix patterns for bulk invalidation
     public static class Prefixes

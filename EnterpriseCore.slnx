@@ -3,4 +3,5 @@
   <Project Path="EnterpriseCore.Application/EnterpriseCore.Application.csproj" />
   <Project Path="EnterpriseCore.Domain/EnterpriseCore.Domain.csproj" />
   <Project Path="EnterpriseCore.Infrastructure/EnterpriseCore.Infrastructure.csproj" />
+  <Project Path="EnterpriseCore.Tests/EnterpriseCore.Tests.csproj" />
 </Solution>

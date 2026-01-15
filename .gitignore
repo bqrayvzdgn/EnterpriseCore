@@ -37,6 +37,7 @@ coverage*/
 # OS files
 .DS_Store
 Thumbs.db
+nul
 
 # User-specific files
 appsettings.*.json
