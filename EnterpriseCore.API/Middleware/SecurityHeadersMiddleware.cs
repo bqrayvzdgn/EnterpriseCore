@@ -23,8 +23,16 @@ public class SecurityHeadersMiddleware
         // Strict Transport Security (HTTPS only)
         context.Response.Headers.Append("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
 
-        // Content Security Policy
-        context.Response.Headers.Append("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:;");
+        // Content Security Policy - Secure configuration without unsafe-inline/unsafe-eval
+        context.Response.Headers.Append("Content-Security-Policy",
+            "default-src 'self'; " +
+            "script-src 'self'; " +
+            "style-src 'self'; " +
+            "img-src 'self' data: https:; " +
+            "font-src 'self' data:; " +
+            "frame-ancestors 'none'; " +
+            "form-action 'self'; " +
+            "base-uri 'self';");
 
         // Referrer Policy
         context.Response.Headers.Append("Referrer-Policy", "strict-origin-when-cross-origin");

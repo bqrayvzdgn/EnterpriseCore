@@ -1,3 +1,4 @@
+using EnterpriseCore.Application.Common.Constants;
 using EnterpriseCore.Application.Common.Models;
 using EnterpriseCore.Application.Features.Tasks.DTOs;
 using EnterpriseCore.Application.Interfaces;
@@ -5,6 +6,7 @@ using EnterpriseCore.Domain.Entities;
 using EnterpriseCore.Domain.Enums;
 using EnterpriseCore.Domain.Interfaces;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
 namespace EnterpriseCore.Application.Features.Tasks.Services;
 
@@ -13,15 +15,18 @@ public class TaskService : ITaskService
     private readonly DbContext _dbContext;
     private readonly ICurrentUserService _currentUser;
     private readonly IUnitOfWork _unitOfWork;
+    private readonly ILogger<TaskService> _logger;
 
     public TaskService(
         DbContext dbContext,
         ICurrentUserService currentUser,
-        IUnitOfWork unitOfWork)
+        IUnitOfWork unitOfWork,
+        ILogger<TaskService> logger)
     {
         _dbContext = dbContext;
         _currentUser = currentUser;
         _unitOfWork = unitOfWork;
+        _logger = logger;
     }
 
     public async Task<Result<PagedResult<TaskDto>>> GetTasksByProjectAsync(
@@ -37,12 +42,15 @@ public class TaskService : ITaskService
 
         if (project == null)
         {
-            return Result.Failure<PagedResult<TaskDto>>("Project not found.", "NOT_FOUND");
+            _logger.LogWarning("Get tasks failed: Project not found. ProjectId: {ProjectId}", projectId);
+            return Result.Failure<PagedResult<TaskDto>>("Project not found.", ErrorCodes.NotFound);
         }
 
         if (!HasProjectAccess(project, _currentUser.UserId))
         {
-            return Result.Failure<PagedResult<TaskDto>>("You don't have access to this project.", "FORBIDDEN");
+            _logger.LogWarning("Get tasks failed: Access denied. ProjectId: {ProjectId}, UserId: {UserId}",
+                projectId, _currentUser.UserId);
+            return Result.Failure<PagedResult<TaskDto>>("You don't have access to this project.", ErrorCodes.Forbidden);
         }
 
         var query = _dbContext.Set<TaskItem>()
@@ -86,12 +94,15 @@ public class TaskService : ITaskService
 
         if (task == null)
         {
-            return Result.Failure<TaskDetailDto>("Task not found.", "NOT_FOUND");
+            _logger.LogWarning("Task not found. TaskId: {TaskId}", id);
+            return Result.Failure<TaskDetailDto>("Task not found.", ErrorCodes.NotFound);
         }
 
         if (!HasProjectAccess(task.Project, _currentUser.UserId))
         {
-            return Result.Failure<TaskDetailDto>("You don't have access to this task.", "FORBIDDEN");
+            _logger.LogWarning("Task access denied. TaskId: {TaskId}, UserId: {UserId}",
+                id, _currentUser.UserId);
+            return Result.Failure<TaskDetailDto>("You don't have access to this task.", ErrorCodes.Forbidden);
         }
 
         var subTaskDtos = task.SubTasks.Select(MapToTaskDto).ToList();
@@ -133,9 +144,13 @@ public class TaskService : ITaskService
         CreateTaskRequest request,
         CancellationToken cancellationToken = default)
     {
+        _logger.LogInformation("Creating task. ProjectId: {ProjectId}, Title: {Title}, UserId: {UserId}",
+            projectId, request.Title, _currentUser.UserId);
+
         if (!_currentUser.UserId.HasValue || !_currentUser.TenantId.HasValue)
         {
-            return Result.Failure<TaskDto>("User not authenticated.", "UNAUTHORIZED");
+            _logger.LogWarning("Task creation failed: User not authenticated");
+            return Result.Failure<TaskDto>("User not authenticated.", ErrorCodes.Unauthorized);
         }
 
         var project = await _dbContext.Set<Project>()
@@ -144,12 +159,15 @@ public class TaskService : ITaskService
 
         if (project == null)
         {
-            return Result.Failure<TaskDto>("Project not found.", "NOT_FOUND");
+            _logger.LogWarning("Task creation failed: Project not found. ProjectId: {ProjectId}", projectId);
+            return Result.Failure<TaskDto>("Project not found.", ErrorCodes.NotFound);
         }
 
         if (!HasProjectPermission(project, _currentUser.UserId, ProjectMemberRole.Member))
         {
-            return Result.Failure<TaskDto>("You don't have permission to create tasks in this project.", "FORBIDDEN");
+            _logger.LogWarning("Task creation failed: Insufficient permissions. ProjectId: {ProjectId}, UserId: {UserId}",
+                projectId, _currentUser.UserId);
+            return Result.Failure<TaskDto>("You don't have permission to create tasks in this project.", ErrorCodes.Forbidden);
         }
 
         var task = new TaskItem
@@ -169,7 +187,17 @@ public class TaskService : ITaskService
         };
 
         _dbContext.Set<TaskItem>().Add(task);
-        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        try
+        {
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException ex)
+        {
+            _logger.LogError(ex, "Database error during task creation. ProjectId: {ProjectId}, Title: {Title}",
+                projectId, request.Title);
+            return Result.Failure<TaskDto>("Task creation failed due to a database error.", ErrorCodes.DatabaseError);
+        }
 
         // Load navigation properties for response
         await _dbContext.Entry(task).Reference(t => t.Project).LoadAsync(cancellationToken);
@@ -177,6 +205,9 @@ public class TaskService : ITaskService
         {
             await _dbContext.Entry(task).Reference(t => t.Assignee).LoadAsync(cancellationToken);
         }
+
+        _logger.LogInformation("Task created successfully. TaskId: {TaskId}, ProjectId: {ProjectId}, Title: {Title}",
+            task.Id, projectId, task.Title);
 
         var dto = MapToTaskDto(task);
         return Result.Success(dto);
@@ -187,6 +218,8 @@ public class TaskService : ITaskService
         UpdateTaskRequest request,
         CancellationToken cancellationToken = default)
     {
+        _logger.LogInformation("Updating task. TaskId: {TaskId}, UserId: {UserId}", id, _currentUser.UserId);
+
         var task = await _dbContext.Set<TaskItem>()
             .Include(t => t.Project)
                 .ThenInclude(p => p.Members)
@@ -198,12 +231,15 @@ public class TaskService : ITaskService
 
         if (task == null)
         {
-            return Result.Failure<TaskDto>("Task not found.", "NOT_FOUND");
+            _logger.LogWarning("Task update failed: Task not found. TaskId: {TaskId}", id);
+            return Result.Failure<TaskDto>("Task not found.", ErrorCodes.NotFound);
         }
 
         if (!HasProjectPermission(task.Project, _currentUser.UserId, ProjectMemberRole.Member))
         {
-            return Result.Failure<TaskDto>("You don't have permission to update this task.", "FORBIDDEN");
+            _logger.LogWarning("Task update failed: Insufficient permissions. TaskId: {TaskId}, UserId: {UserId}",
+                id, _currentUser.UserId);
+            return Result.Failure<TaskDto>("You don't have permission to update this task.", ErrorCodes.Forbidden);
         }
 
         task.Title = request.Title;
@@ -216,7 +252,22 @@ public class TaskService : ITaskService
         task.AssigneeId = request.AssigneeId;
         task.MilestoneId = request.MilestoneId;
 
-        await _unitOfWork.SaveChangesAsync(cancellationToken);
+        try
+        {
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateConcurrencyException ex)
+        {
+            _logger.LogWarning(ex, "Concurrency error during task update. TaskId: {TaskId}", id);
+            return Result.Failure<TaskDto>("Task update failed. Please try again.", ErrorCodes.ConcurrencyError);
+        }
+        catch (DbUpdateException ex)
+        {
+            _logger.LogError(ex, "Database error during task update. TaskId: {TaskId}", id);
+            return Result.Failure<TaskDto>("Task update failed due to a database error.", ErrorCodes.DatabaseError);
+        }
+
+        _logger.LogInformation("Task updated successfully. TaskId: {TaskId}", task.Id);
 
         var dto = MapToTaskDto(task);
         return Result.Success(dto);
@@ -226,6 +277,8 @@ public class TaskService : ITaskService
         Guid id,
         CancellationToken cancellationToken = default)
     {
+        _logger.LogInformation("Deleting task. TaskId: {TaskId}, UserId: {UserId}", id, _currentUser.UserId);
+
         var task = await _dbContext.Set<TaskItem>()
             .Include(t => t.Project)
                 .ThenInclude(p => p.Members)
@@ -233,18 +286,31 @@ public class TaskService : ITaskService
 
         if (task == null)
         {
-            return Result.Failure("Task not found.", "NOT_FOUND");
+            _logger.LogWarning("Task deletion failed: Task not found. TaskId: {TaskId}", id);
+            return Result.Failure("Task not found.", ErrorCodes.NotFound);
         }
 
         if (!HasProjectPermission(task.Project, _currentUser.UserId, ProjectMemberRole.Member))
         {
-            return Result.Failure("You don't have permission to delete this task.", "FORBIDDEN");
+            _logger.LogWarning("Task deletion failed: Insufficient permissions. TaskId: {TaskId}, UserId: {UserId}",
+                id, _currentUser.UserId);
+            return Result.Failure("You don't have permission to delete this task.", ErrorCodes.Forbidden);
         }
 
         // Soft delete
         _dbContext.Set<TaskItem>().Remove(task);
-        await _unitOfWork.SaveChangesAsync(cancellationToken);
 
+        try
+        {
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException ex)
+        {
+            _logger.LogError(ex, "Database error during task deletion. TaskId: {TaskId}", id);
+            return Result.Failure("Task deletion failed due to a database error.", ErrorCodes.DatabaseError);
+        }
+
+        _logger.LogInformation("Task deleted successfully. TaskId: {TaskId}", id);
         return Result.Success();
     }
 
@@ -253,6 +319,9 @@ public class TaskService : ITaskService
         UpdateTaskStatusRequest request,
         CancellationToken cancellationToken = default)
     {
+        _logger.LogInformation("Updating task status. TaskId: {TaskId}, NewStatus: {NewStatus}, UserId: {UserId}",
+            id, request.Status, _currentUser.UserId);
+
         var task = await _dbContext.Set<TaskItem>()
             .Include(t => t.Project)
                 .ThenInclude(p => p.Members)
@@ -264,18 +333,32 @@ public class TaskService : ITaskService
 
         if (task == null)
         {
-            return Result.Failure<TaskDto>("Task not found.", "NOT_FOUND");
+            _logger.LogWarning("Task status update failed: Task not found. TaskId: {TaskId}", id);
+            return Result.Failure<TaskDto>("Task not found.", ErrorCodes.NotFound);
         }
 
         if (!HasProjectPermission(task.Project, _currentUser.UserId, ProjectMemberRole.Member))
         {
-            return Result.Failure<TaskDto>("You don't have permission to update this task.", "FORBIDDEN");
+            _logger.LogWarning("Task status update failed: Insufficient permissions. TaskId: {TaskId}, UserId: {UserId}",
+                id, _currentUser.UserId);
+            return Result.Failure<TaskDto>("You don't have permission to update this task.", ErrorCodes.Forbidden);
         }
 
         var oldStatus = task.Status;
         task.Status = request.Status;
 
-        await _unitOfWork.SaveChangesAsync(cancellationToken);
+        try
+        {
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException ex)
+        {
+            _logger.LogError(ex, "Database error during task status update. TaskId: {TaskId}", id);
+            return Result.Failure<TaskDto>("Task status update failed due to a database error.", ErrorCodes.DatabaseError);
+        }
+
+        _logger.LogInformation("Task status updated. TaskId: {TaskId}, OldStatus: {OldStatus}, NewStatus: {NewStatus}",
+            id, oldStatus, request.Status);
 
         var dto = MapToTaskDto(task);
         return Result.Success(dto);
@@ -286,6 +369,9 @@ public class TaskService : ITaskService
         AssignTaskRequest request,
         CancellationToken cancellationToken = default)
     {
+        _logger.LogInformation("Assigning task. TaskId: {TaskId}, AssigneeId: {AssigneeId}, UserId: {UserId}",
+            id, request.AssigneeId, _currentUser.UserId);
+
         var task = await _dbContext.Set<TaskItem>()
             .Include(t => t.Project)
                 .ThenInclude(p => p.Members)
@@ -297,12 +383,15 @@ public class TaskService : ITaskService
 
         if (task == null)
         {
-            return Result.Failure<TaskDto>("Task not found.", "NOT_FOUND");
+            _logger.LogWarning("Task assignment failed: Task not found. TaskId: {TaskId}", id);
+            return Result.Failure<TaskDto>("Task not found.", ErrorCodes.NotFound);
         }
 
         if (!HasProjectPermission(task.Project, _currentUser.UserId, ProjectMemberRole.Member))
         {
-            return Result.Failure<TaskDto>("You don't have permission to assign this task.", "FORBIDDEN");
+            _logger.LogWarning("Task assignment failed: Insufficient permissions. TaskId: {TaskId}, UserId: {UserId}",
+                id, _currentUser.UserId);
+            return Result.Failure<TaskDto>("You don't have permission to assign this task.", ErrorCodes.Forbidden);
         }
 
         // Verify assignee is a project member (if not null)
@@ -311,10 +400,13 @@ public class TaskService : ITaskService
             var isMember = task.Project.Members.Any(m => m.UserId == request.AssigneeId.Value);
             if (!isMember)
             {
+                _logger.LogWarning("Task assignment failed: Invalid assignee. TaskId: {TaskId}, AssigneeId: {AssigneeId}",
+                    id, request.AssigneeId);
                 return Result.Failure<TaskDto>("Assignee is not a member of this project.", "INVALID_ASSIGNEE");
             }
         }
 
+        var oldAssigneeId = task.AssigneeId;
         task.AssigneeId = request.AssigneeId;
 
         // Reload assignee if set
@@ -323,7 +415,18 @@ public class TaskService : ITaskService
             await _dbContext.Entry(task).Reference(t => t.Assignee).LoadAsync(cancellationToken);
         }
 
-        await _unitOfWork.SaveChangesAsync(cancellationToken);
+        try
+        {
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException ex)
+        {
+            _logger.LogError(ex, "Database error during task assignment. TaskId: {TaskId}", id);
+            return Result.Failure<TaskDto>("Task assignment failed due to a database error.", ErrorCodes.DatabaseError);
+        }
+
+        _logger.LogInformation("Task assigned successfully. TaskId: {TaskId}, OldAssigneeId: {OldAssigneeId}, NewAssigneeId: {NewAssigneeId}",
+            id, oldAssigneeId, request.AssigneeId);
 
         var dto = MapToTaskDto(task);
         return Result.Success(dto);
@@ -335,7 +438,8 @@ public class TaskService : ITaskService
     {
         if (!_currentUser.UserId.HasValue)
         {
-            return Result.Failure<PagedResult<TaskDto>>("User not authenticated.", "UNAUTHORIZED");
+            _logger.LogWarning("Get my tasks failed: User not authenticated");
+            return Result.Failure<PagedResult<TaskDto>>("User not authenticated.", ErrorCodes.Unauthorized);
         }
 
         var query = _dbContext.Set<TaskItem>()
@@ -375,12 +479,15 @@ public class TaskService : ITaskService
 
         if (task == null)
         {
-            return Result.Failure<IEnumerable<TaskCommentDto>>("Task not found.", "NOT_FOUND");
+            _logger.LogWarning("Get comments failed: Task not found. TaskId: {TaskId}", taskId);
+            return Result.Failure<IEnumerable<TaskCommentDto>>("Task not found.", ErrorCodes.NotFound);
         }
 
         if (!HasProjectAccess(task.Project, _currentUser.UserId))
         {
-            return Result.Failure<IEnumerable<TaskCommentDto>>("You don't have access to this task.", "FORBIDDEN");
+            _logger.LogWarning("Get comments failed: Access denied. TaskId: {TaskId}, UserId: {UserId}",
+                taskId, _currentUser.UserId);
+            return Result.Failure<IEnumerable<TaskCommentDto>>("You don't have access to this task.", ErrorCodes.Forbidden);
         }
 
         var comments = task.Comments
@@ -400,9 +507,13 @@ public class TaskService : ITaskService
         CreateCommentRequest request,
         CancellationToken cancellationToken = default)
     {
+        _logger.LogInformation("Adding comment to task. TaskId: {TaskId}, UserId: {UserId}",
+            taskId, _currentUser.UserId);
+
         if (!_currentUser.UserId.HasValue || !_currentUser.TenantId.HasValue)
         {
-            return Result.Failure<TaskCommentDto>("User not authenticated.", "UNAUTHORIZED");
+            _logger.LogWarning("Add comment failed: User not authenticated");
+            return Result.Failure<TaskCommentDto>("User not authenticated.", ErrorCodes.Unauthorized);
         }
 
         var task = await _dbContext.Set<TaskItem>()
@@ -412,12 +523,15 @@ public class TaskService : ITaskService
 
         if (task == null)
         {
-            return Result.Failure<TaskCommentDto>("Task not found.", "NOT_FOUND");
+            _logger.LogWarning("Add comment failed: Task not found. TaskId: {TaskId}", taskId);
+            return Result.Failure<TaskCommentDto>("Task not found.", ErrorCodes.NotFound);
         }
 
         if (!HasProjectAccess(task.Project, _currentUser.UserId))
         {
-            return Result.Failure<TaskCommentDto>("You don't have access to this task.", "FORBIDDEN");
+            _logger.LogWarning("Add comment failed: Access denied. TaskId: {TaskId}, UserId: {UserId}",
+                taskId, _currentUser.UserId);
+            return Result.Failure<TaskCommentDto>("You don't have access to this task.", ErrorCodes.Forbidden);
         }
 
         var comment = new TaskComment
@@ -430,7 +544,19 @@ public class TaskService : ITaskService
         };
 
         _dbContext.Set<TaskComment>().Add(comment);
-        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        try
+        {
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException ex)
+        {
+            _logger.LogError(ex, "Database error while adding comment. TaskId: {TaskId}", taskId);
+            return Result.Failure<TaskCommentDto>("Failed to add comment due to a database error.", ErrorCodes.DatabaseError);
+        }
+
+        _logger.LogInformation("Comment added successfully. TaskId: {TaskId}, CommentId: {CommentId}",
+            taskId, comment.Id);
 
         var dto = new TaskCommentDto(
             comment.Id,
@@ -446,6 +572,9 @@ public class TaskService : ITaskService
         Guid commentId,
         CancellationToken cancellationToken = default)
     {
+        _logger.LogInformation("Deleting comment. CommentId: {CommentId}, UserId: {UserId}",
+            commentId, _currentUser.UserId);
+
         var comment = await _dbContext.Set<TaskComment>()
             .Include(c => c.Task)
                 .ThenInclude(t => t.Project)
@@ -454,7 +583,8 @@ public class TaskService : ITaskService
 
         if (comment == null)
         {
-            return Result.Failure("Comment not found.", "NOT_FOUND");
+            _logger.LogWarning("Delete comment failed: Comment not found. CommentId: {CommentId}", commentId);
+            return Result.Failure("Comment not found.", ErrorCodes.NotFound);
         }
 
         // Only comment author or project manager+ can delete
@@ -463,12 +593,24 @@ public class TaskService : ITaskService
 
         if (!isAuthor && !isManager)
         {
-            return Result.Failure("You don't have permission to delete this comment.", "FORBIDDEN");
+            _logger.LogWarning("Delete comment failed: Insufficient permissions. CommentId: {CommentId}, UserId: {UserId}",
+                commentId, _currentUser.UserId);
+            return Result.Failure("You don't have permission to delete this comment.", ErrorCodes.Forbidden);
         }
 
         _dbContext.Set<TaskComment>().Remove(comment);
-        await _unitOfWork.SaveChangesAsync(cancellationToken);
 
+        try
+        {
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException ex)
+        {
+            _logger.LogError(ex, "Database error while deleting comment. CommentId: {CommentId}", commentId);
+            return Result.Failure("Failed to delete comment due to a database error.", ErrorCodes.DatabaseError);
+        }
+
+        _logger.LogInformation("Comment deleted successfully. CommentId: {CommentId}", commentId);
         return Result.Success();
     }
 

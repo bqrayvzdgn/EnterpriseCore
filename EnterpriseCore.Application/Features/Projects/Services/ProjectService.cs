@@ -1,3 +1,4 @@
+using EnterpriseCore.Application.Common.Constants;
 using EnterpriseCore.Application.Common.Models;
 using EnterpriseCore.Application.Features.Projects.DTOs;
 using EnterpriseCore.Application.Interfaces;
@@ -5,6 +6,7 @@ using EnterpriseCore.Domain.Entities;
 using EnterpriseCore.Domain.Enums;
 using EnterpriseCore.Domain.Interfaces;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
 namespace EnterpriseCore.Application.Features.Projects.Services;
 
@@ -13,15 +15,18 @@ public class ProjectService : IProjectService
     private readonly DbContext _dbContext;
     private readonly ICurrentUserService _currentUser;
     private readonly IUnitOfWork _unitOfWork;
+    private readonly ILogger<ProjectService> _logger;
 
     public ProjectService(
         DbContext dbContext,
         ICurrentUserService currentUser,
-        IUnitOfWork unitOfWork)
+        IUnitOfWork unitOfWork,
+        ILogger<ProjectService> logger)
     {
         _dbContext = dbContext;
         _currentUser = currentUser;
         _unitOfWork = unitOfWork;
+        _logger = logger;
     }
 
     public async Task<Result<PagedResult<ProjectDto>>> GetProjectsAsync(
@@ -77,7 +82,8 @@ public class ProjectService : IProjectService
 
         if (project == null)
         {
-            return Result.Failure<ProjectDetailDto>("Project not found.", "NOT_FOUND");
+            _logger.LogWarning("Project not found. ProjectId: {ProjectId}", id);
+            return Result.Failure<ProjectDetailDto>("Project not found.", ErrorCodes.NotFound);
         }
 
         var memberDtos = project.Members.Select(m => new ProjectMemberDto(
@@ -131,9 +137,13 @@ public class ProjectService : IProjectService
         CreateProjectRequest request,
         CancellationToken cancellationToken = default)
     {
+        _logger.LogInformation("Creating project. Name: {ProjectName}, UserId: {UserId}",
+            request.Name, _currentUser.UserId);
+
         if (!_currentUser.UserId.HasValue || !_currentUser.TenantId.HasValue)
         {
-            return Result.Failure<ProjectDto>("User not authenticated.", "UNAUTHORIZED");
+            _logger.LogWarning("Project creation failed: User not authenticated");
+            return Result.Failure<ProjectDto>("User not authenticated.", ErrorCodes.Unauthorized);
         }
 
         var project = new Project
@@ -161,7 +171,19 @@ public class ProjectService : IProjectService
         };
 
         _dbContext.Set<ProjectMember>().Add(ownerMember);
-        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        try
+        {
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException ex)
+        {
+            _logger.LogError(ex, "Database error during project creation. ProjectName: {ProjectName}", request.Name);
+            return Result.Failure<ProjectDto>("Project creation failed due to a database error.", ErrorCodes.DatabaseError);
+        }
+
+        _logger.LogInformation("Project created successfully. ProjectId: {ProjectId}, ProjectName: {ProjectName}, OwnerId: {OwnerId}",
+            project.Id, project.Name, project.OwnerId);
 
         var dto = new ProjectDto(
             project.Id,
@@ -186,6 +208,9 @@ public class ProjectService : IProjectService
         UpdateProjectRequest request,
         CancellationToken cancellationToken = default)
     {
+        _logger.LogInformation("Updating project. ProjectId: {ProjectId}, UserId: {UserId}",
+            id, _currentUser.UserId);
+
         var project = await _dbContext.Set<Project>()
             .Include(p => p.Owner)
             .Include(p => p.Members)
@@ -194,13 +219,16 @@ public class ProjectService : IProjectService
 
         if (project == null)
         {
-            return Result.Failure<ProjectDto>("Project not found.", "NOT_FOUND");
+            _logger.LogWarning("Project update failed: Project not found. ProjectId: {ProjectId}", id);
+            return Result.Failure<ProjectDto>("Project not found.", ErrorCodes.NotFound);
         }
 
         // Check if user has permission to update
         if (!HasProjectPermission(project, _currentUser.UserId, ProjectMemberRole.Manager))
         {
-            return Result.Failure<ProjectDto>("You don't have permission to update this project.", "FORBIDDEN");
+            _logger.LogWarning("Project update failed: Insufficient permissions. ProjectId: {ProjectId}, UserId: {UserId}",
+                id, _currentUser.UserId);
+            return Result.Failure<ProjectDto>("You don't have permission to update this project.", ErrorCodes.Forbidden);
         }
 
         project.Name = request.Name;
@@ -210,7 +238,22 @@ public class ProjectService : IProjectService
         project.EndDate = request.EndDate;
         project.Budget = request.Budget;
 
-        await _unitOfWork.SaveChangesAsync(cancellationToken);
+        try
+        {
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateConcurrencyException ex)
+        {
+            _logger.LogWarning(ex, "Concurrency error during project update. ProjectId: {ProjectId}", id);
+            return Result.Failure<ProjectDto>("Project update failed. Please try again.", ErrorCodes.ConcurrencyError);
+        }
+        catch (DbUpdateException ex)
+        {
+            _logger.LogError(ex, "Database error during project update. ProjectId: {ProjectId}", id);
+            return Result.Failure<ProjectDto>("Project update failed due to a database error.", ErrorCodes.DatabaseError);
+        }
+
+        _logger.LogInformation("Project updated successfully. ProjectId: {ProjectId}", project.Id);
 
         var dto = new ProjectDto(
             project.Id,
@@ -234,24 +277,40 @@ public class ProjectService : IProjectService
         Guid id,
         CancellationToken cancellationToken = default)
     {
+        _logger.LogInformation("Deleting project. ProjectId: {ProjectId}, UserId: {UserId}",
+            id, _currentUser.UserId);
+
         var project = await _dbContext.Set<Project>()
             .FirstOrDefaultAsync(p => p.Id == id, cancellationToken);
 
         if (project == null)
         {
-            return Result.Failure("Project not found.", "NOT_FOUND");
+            _logger.LogWarning("Project deletion failed: Project not found. ProjectId: {ProjectId}", id);
+            return Result.Failure("Project not found.", ErrorCodes.NotFound);
         }
 
         // Only owner can delete
         if (project.OwnerId != _currentUser.UserId)
         {
-            return Result.Failure("Only the project owner can delete the project.", "FORBIDDEN");
+            _logger.LogWarning("Project deletion failed: Only owner can delete. ProjectId: {ProjectId}, OwnerId: {OwnerId}, UserId: {UserId}",
+                id, project.OwnerId, _currentUser.UserId);
+            return Result.Failure("Only the project owner can delete the project.", ErrorCodes.Forbidden);
         }
 
         // Soft delete - EF Core will handle this via SaveChangesAsync interceptor
         _dbContext.Set<Project>().Remove(project);
-        await _unitOfWork.SaveChangesAsync(cancellationToken);
 
+        try
+        {
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException ex)
+        {
+            _logger.LogError(ex, "Database error during project deletion. ProjectId: {ProjectId}", id);
+            return Result.Failure("Project deletion failed due to a database error.", ErrorCodes.DatabaseError);
+        }
+
+        _logger.LogInformation("Project deleted successfully. ProjectId: {ProjectId}", id);
         return Result.Success();
     }
 
@@ -266,7 +325,8 @@ public class ProjectService : IProjectService
 
         if (project == null)
         {
-            return Result.Failure<ProjectStatsDto>("Project not found.", "NOT_FOUND");
+            _logger.LogWarning("Project stats request failed: Project not found. ProjectId: {ProjectId}", id);
+            return Result.Failure<ProjectStatsDto>("Project not found.", ErrorCodes.NotFound);
         }
 
         var totalTasks = project.Tasks.Count;
@@ -290,24 +350,32 @@ public class ProjectService : IProjectService
         AddProjectMemberRequest request,
         CancellationToken cancellationToken = default)
     {
+        _logger.LogInformation("Adding member to project. ProjectId: {ProjectId}, NewMemberId: {NewMemberId}, Role: {Role}",
+            projectId, request.UserId, request.Role);
+
         var project = await _dbContext.Set<Project>()
             .Include(p => p.Members)
             .FirstOrDefaultAsync(p => p.Id == projectId, cancellationToken);
 
         if (project == null)
         {
-            return Result.Failure("Project not found.", "NOT_FOUND");
+            _logger.LogWarning("Add member failed: Project not found. ProjectId: {ProjectId}", projectId);
+            return Result.Failure("Project not found.", ErrorCodes.NotFound);
         }
 
         // Check if user has permission to add members
         if (!HasProjectPermission(project, _currentUser.UserId, ProjectMemberRole.Manager))
         {
-            return Result.Failure("You don't have permission to add members.", "FORBIDDEN");
+            _logger.LogWarning("Add member failed: Insufficient permissions. ProjectId: {ProjectId}, UserId: {UserId}",
+                projectId, _currentUser.UserId);
+            return Result.Failure("You don't have permission to add members.", ErrorCodes.Forbidden);
         }
 
         // Check if user is already a member
         if (project.Members.Any(m => m.UserId == request.UserId))
         {
+            _logger.LogWarning("Add member failed: User already a member. ProjectId: {ProjectId}, MemberId: {MemberId}",
+                projectId, request.UserId);
             return Result.Failure("User is already a member of this project.", "ALREADY_MEMBER");
         }
 
@@ -320,8 +388,20 @@ public class ProjectService : IProjectService
         };
 
         _dbContext.Set<ProjectMember>().Add(member);
-        await _unitOfWork.SaveChangesAsync(cancellationToken);
 
+        try
+        {
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException ex)
+        {
+            _logger.LogError(ex, "Database error while adding member. ProjectId: {ProjectId}, MemberId: {MemberId}",
+                projectId, request.UserId);
+            return Result.Failure("Failed to add member due to a database error.", ErrorCodes.DatabaseError);
+        }
+
+        _logger.LogInformation("Member added successfully. ProjectId: {ProjectId}, MemberId: {MemberId}, Role: {Role}",
+            projectId, request.UserId, request.Role);
         return Result.Success();
     }
 
@@ -330,36 +410,58 @@ public class ProjectService : IProjectService
         Guid userId,
         CancellationToken cancellationToken = default)
     {
+        _logger.LogInformation("Removing member from project. ProjectId: {ProjectId}, MemberId: {MemberId}",
+            projectId, userId);
+
         var project = await _dbContext.Set<Project>()
             .Include(p => p.Members)
             .FirstOrDefaultAsync(p => p.Id == projectId, cancellationToken);
 
         if (project == null)
         {
-            return Result.Failure("Project not found.", "NOT_FOUND");
+            _logger.LogWarning("Remove member failed: Project not found. ProjectId: {ProjectId}", projectId);
+            return Result.Failure("Project not found.", ErrorCodes.NotFound);
         }
 
         // Can't remove the owner
         if (project.OwnerId == userId)
         {
+            _logger.LogWarning("Remove member failed: Cannot remove owner. ProjectId: {ProjectId}, OwnerId: {OwnerId}",
+                projectId, userId);
             return Result.Failure("Cannot remove the project owner.", "CANNOT_REMOVE_OWNER");
         }
 
         // Check if user has permission to remove members
         if (!HasProjectPermission(project, _currentUser.UserId, ProjectMemberRole.Manager))
         {
-            return Result.Failure("You don't have permission to remove members.", "FORBIDDEN");
+            _logger.LogWarning("Remove member failed: Insufficient permissions. ProjectId: {ProjectId}, UserId: {UserId}",
+                projectId, _currentUser.UserId);
+            return Result.Failure("You don't have permission to remove members.", ErrorCodes.Forbidden);
         }
 
         var member = project.Members.FirstOrDefault(m => m.UserId == userId);
         if (member == null)
         {
-            return Result.Failure("User is not a member of this project.", "NOT_FOUND");
+            _logger.LogWarning("Remove member failed: User not a member. ProjectId: {ProjectId}, MemberId: {MemberId}",
+                projectId, userId);
+            return Result.Failure("User is not a member of this project.", ErrorCodes.NotFound);
         }
 
         _dbContext.Set<ProjectMember>().Remove(member);
-        await _unitOfWork.SaveChangesAsync(cancellationToken);
 
+        try
+        {
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException ex)
+        {
+            _logger.LogError(ex, "Database error while removing member. ProjectId: {ProjectId}, MemberId: {MemberId}",
+                projectId, userId);
+            return Result.Failure("Failed to remove member due to a database error.", ErrorCodes.DatabaseError);
+        }
+
+        _logger.LogInformation("Member removed successfully. ProjectId: {ProjectId}, MemberId: {MemberId}",
+            projectId, userId);
         return Result.Success();
     }
 

@@ -2,6 +2,10 @@ using EnterpriseCore.Domain.Interfaces;
 
 namespace EnterpriseCore.Domain.Entities;
 
+/// <summary>
+/// Immutable audit log entity - should never be updated or deleted.
+/// Does not implement ISoftDeletable intentionally.
+/// </summary>
 public class ActivityLog : IMultiTenant
 {
     public Guid Id { get; set; }
@@ -15,7 +19,7 @@ public class ActivityLog : IMultiTenant
     // IMultiTenant
     public Guid TenantId { get; set; }
 
-    // FK
+    // FK - The user who performed the action
     public Guid UserId { get; set; }
 
     // Navigation properties

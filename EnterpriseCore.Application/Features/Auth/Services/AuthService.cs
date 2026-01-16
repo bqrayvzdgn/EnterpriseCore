@@ -1,8 +1,13 @@
+using EnterpriseCore.Application.Common.Constants;
 using EnterpriseCore.Application.Common.Models;
+using EnterpriseCore.Application.Common.Settings;
 using EnterpriseCore.Application.Features.Auth.DTOs;
 using EnterpriseCore.Application.Interfaces;
 using EnterpriseCore.Domain.Entities;
 using EnterpriseCore.Domain.Interfaces;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace EnterpriseCore.Application.Features.Auth.Services;
 
@@ -14,6 +19,8 @@ public class AuthService : IAuthService
     private readonly IPasswordHasher _passwordHasher;
     private readonly ITokenService _tokenService;
     private readonly IUnitOfWork _unitOfWork;
+    private readonly ILogger<AuthService> _logger;
+    private readonly JwtSettings _jwtSettings;
 
     public AuthService(
         IUserRepository userRepository,
@@ -21,7 +28,9 @@ public class AuthService : IAuthService
         IRoleRepository roleRepository,
         IPasswordHasher passwordHasher,
         ITokenService tokenService,
-        IUnitOfWork unitOfWork)
+        IUnitOfWork unitOfWork,
+        ILogger<AuthService> logger,
+        IOptions<JwtSettings> jwtSettings)
     {
         _userRepository = userRepository;
         _tenantRepository = tenantRepository;
@@ -29,16 +38,22 @@ public class AuthService : IAuthService
         _passwordHasher = passwordHasher;
         _tokenService = tokenService;
         _unitOfWork = unitOfWork;
+        _logger = logger;
+        _jwtSettings = jwtSettings.Value;
     }
 
     public async Task<Result<AuthResponse>> RegisterAsync(
         RegisterRequest request,
         CancellationToken cancellationToken = default)
     {
+        _logger.LogInformation("Registration attempt for email: {Email}, tenant: {TenantName}",
+            request.Email, request.TenantName);
+
         // Check if email already exists
         if (await _userRepository.EmailExistsAsync(request.Email, cancellationToken))
         {
-            return Result.Failure<AuthResponse>("Email already registered.", "EMAIL_EXISTS");
+            _logger.LogWarning("Registration failed: Email already exists - {Email}", request.Email);
+            return Result.Failure<AuthResponse>("Email already registered.", ErrorCodes.EmailExists);
         }
 
         // Create tenant
@@ -85,9 +100,20 @@ public class AuthService : IAuthService
         var refreshToken = _tokenService.GenerateRefreshToken();
 
         user.RefreshToken = refreshToken;
-        user.RefreshTokenExpiryTime = DateTime.UtcNow.AddDays(7);
+        user.RefreshTokenExpiryTime = DateTime.UtcNow.AddDays(_jwtSettings.RefreshTokenExpirationDays);
 
-        await _unitOfWork.SaveChangesAsync(cancellationToken);
+        try
+        {
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException ex)
+        {
+            _logger.LogError(ex, "Database error during user registration for email: {Email}", request.Email);
+            return Result.Failure<AuthResponse>("Registration failed due to a database error.", ErrorCodes.DatabaseError);
+        }
+
+        _logger.LogInformation("User registered successfully. UserId: {UserId}, Email: {Email}, TenantId: {TenantId}",
+            user.Id, user.Email, tenant.Id);
 
         return new AuthResponse(
             user.Id,
@@ -96,23 +122,28 @@ public class AuthService : IAuthService
             user.LastName,
             accessToken,
             refreshToken,
-            DateTime.UtcNow.AddHours(1));
+            DateTime.UtcNow.AddMinutes(_jwtSettings.ExpirationMinutes));
     }
 
     public async Task<Result<AuthResponse>> LoginAsync(
         LoginRequest request,
         CancellationToken cancellationToken = default)
     {
+        _logger.LogInformation("Login attempt for email: {Email}", request.Email);
+
         var user = await _userRepository.GetByEmailAsync(request.Email, cancellationToken);
 
         if (user == null || !_passwordHasher.Verify(request.Password, user.PasswordHash))
         {
-            return Result.Failure<AuthResponse>("Invalid email or password.", "INVALID_CREDENTIALS");
+            _logger.LogWarning("Login failed: Invalid credentials for email: {Email}", request.Email);
+            return Result.Failure<AuthResponse>("Invalid email or password.", ErrorCodes.InvalidCredentials);
         }
 
         if (!user.IsActive)
         {
-            return Result.Failure<AuthResponse>("Account is deactivated.", "ACCOUNT_INACTIVE");
+            _logger.LogWarning("Login failed: Account inactive for UserId: {UserId}, Email: {Email}",
+                user.Id, user.Email);
+            return Result.Failure<AuthResponse>("Account is deactivated.", ErrorCodes.AccountInactive);
         }
 
         // Generate tokens
@@ -121,9 +152,25 @@ public class AuthService : IAuthService
         var refreshToken = _tokenService.GenerateRefreshToken();
 
         user.RefreshToken = refreshToken;
-        user.RefreshTokenExpiryTime = DateTime.UtcNow.AddDays(7);
+        user.RefreshTokenExpiryTime = DateTime.UtcNow.AddDays(_jwtSettings.RefreshTokenExpirationDays);
 
-        await _unitOfWork.SaveChangesAsync(cancellationToken);
+        try
+        {
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateConcurrencyException ex)
+        {
+            _logger.LogWarning(ex, "Concurrency error during login for UserId: {UserId}", user.Id);
+            return Result.Failure<AuthResponse>("Login failed. Please try again.", ErrorCodes.ConcurrencyError);
+        }
+        catch (DbUpdateException ex)
+        {
+            _logger.LogError(ex, "Database error during login for UserId: {UserId}", user.Id);
+            return Result.Failure<AuthResponse>("Login failed due to a database error.", ErrorCodes.DatabaseError);
+        }
+
+        _logger.LogInformation("User logged in successfully. UserId: {UserId}, Email: {Email}, TenantId: {TenantId}",
+            user.Id, user.Email, user.TenantId);
 
         return new AuthResponse(
             user.Id,
@@ -132,7 +179,7 @@ public class AuthService : IAuthService
             user.LastName,
             accessToken,
             refreshToken,
-            DateTime.UtcNow.AddHours(1));
+            DateTime.UtcNow.AddMinutes(_jwtSettings.ExpirationMinutes));
     }
 
     public async Task<Result<AuthResponse>> RefreshTokenAsync(
@@ -143,18 +190,34 @@ public class AuthService : IAuthService
 
         if (user == null || user.RefreshTokenExpiryTime <= DateTime.UtcNow)
         {
-            return Result.Failure<AuthResponse>("Invalid or expired refresh token.", "INVALID_TOKEN");
+            _logger.LogWarning("Token refresh failed: Invalid or expired refresh token");
+            return Result.Failure<AuthResponse>("Invalid or expired refresh token.", ErrorCodes.InvalidToken);
         }
 
-        // Generate new tokens
+        // Generate new tokens with rotation (invalidate old token)
         var permissions = await _userRepository.GetPermissionsAsync(user.Id, cancellationToken);
         var accessToken = _tokenService.GenerateAccessToken(user, permissions);
         var refreshToken = _tokenService.GenerateRefreshToken();
 
         user.RefreshToken = refreshToken;
-        user.RefreshTokenExpiryTime = DateTime.UtcNow.AddDays(7);
+        user.RefreshTokenExpiryTime = DateTime.UtcNow.AddDays(_jwtSettings.RefreshTokenExpirationDays);
 
-        await _unitOfWork.SaveChangesAsync(cancellationToken);
+        try
+        {
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateConcurrencyException ex)
+        {
+            _logger.LogWarning(ex, "Concurrency error during token refresh for UserId: {UserId}", user.Id);
+            return Result.Failure<AuthResponse>("Token refresh failed. Please try again.", ErrorCodes.ConcurrencyError);
+        }
+        catch (DbUpdateException ex)
+        {
+            _logger.LogError(ex, "Database error during token refresh for UserId: {UserId}", user.Id);
+            return Result.Failure<AuthResponse>("Token refresh failed due to a database error.", ErrorCodes.DatabaseError);
+        }
+
+        _logger.LogInformation("Token refreshed successfully for UserId: {UserId}", user.Id);
 
         return new AuthResponse(
             user.Id,
@@ -163,7 +226,7 @@ public class AuthService : IAuthService
             user.LastName,
             accessToken,
             refreshToken,
-            DateTime.UtcNow.AddHours(1));
+            DateTime.UtcNow.AddMinutes(_jwtSettings.ExpirationMinutes));
     }
 
     public Task<Result> ForgotPasswordAsync(

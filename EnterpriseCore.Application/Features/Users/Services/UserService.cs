@@ -1,9 +1,11 @@
+using EnterpriseCore.Application.Common.Constants;
 using EnterpriseCore.Application.Common.Models;
 using EnterpriseCore.Application.Features.Users.DTOs;
 using EnterpriseCore.Application.Interfaces;
 using EnterpriseCore.Domain.Entities;
 using EnterpriseCore.Domain.Interfaces;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
 namespace EnterpriseCore.Application.Features.Users.Services;
 
@@ -13,17 +15,20 @@ public class UserService : IUserService
     private readonly ICurrentUserService _currentUser;
     private readonly IPasswordHasher _passwordHasher;
     private readonly IUnitOfWork _unitOfWork;
+    private readonly ILogger<UserService> _logger;
 
     public UserService(
         DbContext dbContext,
         ICurrentUserService currentUser,
         IPasswordHasher passwordHasher,
-        IUnitOfWork unitOfWork)
+        IUnitOfWork unitOfWork,
+        ILogger<UserService> logger)
     {
         _dbContext = dbContext;
         _currentUser = currentUser;
         _passwordHasher = passwordHasher;
         _unitOfWork = unitOfWork;
+        _logger = logger;
     }
 
     public async Task<Result<PagedResult<UserListDto>>> GetUsersAsync(
@@ -70,7 +75,8 @@ public class UserService : IUserService
 
         if (user == null)
         {
-            return Result.Failure<UserDetailDto>("User not found.", "NOT_FOUND");
+            _logger.LogWarning("User not found. UserId: {UserId}", id);
+            return Result.Failure<UserDetailDto>("User not found.", ErrorCodes.NotFound);
         }
 
         var roleDtos = user.UserRoles.Select(ur => new RoleDto(
@@ -96,9 +102,13 @@ public class UserService : IUserService
         CreateUserRequest request,
         CancellationToken cancellationToken = default)
     {
+        _logger.LogInformation("Creating user. Email: {Email}, TenantId: {TenantId}",
+            request.Email, _currentUser.TenantId);
+
         if (!_currentUser.TenantId.HasValue)
         {
-            return Result.Failure<UserListDto>("User not authenticated.", "UNAUTHORIZED");
+            _logger.LogWarning("User creation failed: User not authenticated");
+            return Result.Failure<UserListDto>("User not authenticated.", ErrorCodes.Unauthorized);
         }
 
         // Check if email already exists in tenant
@@ -107,7 +117,8 @@ public class UserService : IUserService
 
         if (emailExists)
         {
-            return Result.Failure<UserListDto>("Email already exists.", "EMAIL_EXISTS");
+            _logger.LogWarning("User creation failed: Email already exists. Email: {Email}", request.Email);
+            return Result.Failure<UserListDto>("Email already exists.", ErrorCodes.EmailExists);
         }
 
         var user = new User
@@ -122,7 +133,19 @@ public class UserService : IUserService
         };
 
         _dbContext.Set<User>().Add(user);
-        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        try
+        {
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException ex)
+        {
+            _logger.LogError(ex, "Database error during user creation. Email: {Email}", request.Email);
+            return Result.Failure<UserListDto>("User creation failed due to a database error.", ErrorCodes.DatabaseError);
+        }
+
+        _logger.LogInformation("User created successfully. UserId: {UserId}, Email: {Email}, TenantId: {TenantId}",
+            user.Id, user.Email, user.TenantId);
 
         var dto = new UserListDto(
             user.Id,
@@ -141,6 +164,8 @@ public class UserService : IUserService
         UpdateUserRequest request,
         CancellationToken cancellationToken = default)
     {
+        _logger.LogInformation("Updating user. UserId: {UserId}", id);
+
         var user = await _dbContext.Set<User>()
             .Include(u => u.UserRoles)
                 .ThenInclude(ur => ur.Role)
@@ -148,14 +173,30 @@ public class UserService : IUserService
 
         if (user == null)
         {
-            return Result.Failure<UserListDto>("User not found.", "NOT_FOUND");
+            _logger.LogWarning("User update failed: User not found. UserId: {UserId}", id);
+            return Result.Failure<UserListDto>("User not found.", ErrorCodes.NotFound);
         }
 
         user.FirstName = request.FirstName;
         user.LastName = request.LastName;
         user.IsActive = request.IsActive;
 
-        await _unitOfWork.SaveChangesAsync(cancellationToken);
+        try
+        {
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateConcurrencyException ex)
+        {
+            _logger.LogWarning(ex, "Concurrency error during user update. UserId: {UserId}", id);
+            return Result.Failure<UserListDto>("User update failed. Please try again.", ErrorCodes.ConcurrencyError);
+        }
+        catch (DbUpdateException ex)
+        {
+            _logger.LogError(ex, "Database error during user update. UserId: {UserId}", id);
+            return Result.Failure<UserListDto>("User update failed due to a database error.", ErrorCodes.DatabaseError);
+        }
+
+        _logger.LogInformation("User updated successfully. UserId: {UserId}", user.Id);
 
         var dto = new UserListDto(
             user.Id,
@@ -173,23 +214,38 @@ public class UserService : IUserService
         Guid id,
         CancellationToken cancellationToken = default)
     {
+        _logger.LogInformation("Deleting user. UserId: {UserId}, RequestedBy: {RequestedBy}",
+            id, _currentUser.UserId);
+
         var user = await _dbContext.Set<User>()
             .FirstOrDefaultAsync(u => u.Id == id, cancellationToken);
 
         if (user == null)
         {
-            return Result.Failure("User not found.", "NOT_FOUND");
+            _logger.LogWarning("User deletion failed: User not found. UserId: {UserId}", id);
+            return Result.Failure("User not found.", ErrorCodes.NotFound);
         }
 
         // Cannot delete yourself
         if (user.Id == _currentUser.UserId)
         {
+            _logger.LogWarning("User deletion failed: Cannot delete self. UserId: {UserId}", id);
             return Result.Failure("Cannot delete your own account.", "CANNOT_DELETE_SELF");
         }
 
         _dbContext.Set<User>().Remove(user);
-        await _unitOfWork.SaveChangesAsync(cancellationToken);
 
+        try
+        {
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException ex)
+        {
+            _logger.LogError(ex, "Database error during user deletion. UserId: {UserId}", id);
+            return Result.Failure("User deletion failed due to a database error.", ErrorCodes.DatabaseError);
+        }
+
+        _logger.LogInformation("User deleted successfully. UserId: {UserId}", id);
         return Result.Success();
     }
 
@@ -198,13 +254,17 @@ public class UserService : IUserService
         AssignRolesRequest request,
         CancellationToken cancellationToken = default)
     {
+        _logger.LogInformation("Assigning roles to user. UserId: {UserId}, RoleIds: {RoleIds}",
+            userId, string.Join(", ", request.RoleIds));
+
         var user = await _dbContext.Set<User>()
             .Include(u => u.UserRoles)
             .FirstOrDefaultAsync(u => u.Id == userId, cancellationToken);
 
         if (user == null)
         {
-            return Result.Failure("User not found.", "NOT_FOUND");
+            _logger.LogWarning("Role assignment failed: User not found. UserId: {UserId}", userId);
+            return Result.Failure("User not found.", ErrorCodes.NotFound);
         }
 
         // Remove existing roles
@@ -218,6 +278,8 @@ public class UserService : IUserService
 
             if (!roleExists)
             {
+                _logger.LogWarning("Role assignment failed: Role not found. UserId: {UserId}, RoleId: {RoleId}",
+                    userId, roleId);
                 return Result.Failure($"Role with ID {roleId} not found.", "ROLE_NOT_FOUND");
             }
 
@@ -231,8 +293,18 @@ public class UserService : IUserService
             _dbContext.Set<UserRole>().Add(userRole);
         }
 
-        await _unitOfWork.SaveChangesAsync(cancellationToken);
+        try
+        {
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException ex)
+        {
+            _logger.LogError(ex, "Database error during role assignment. UserId: {UserId}", userId);
+            return Result.Failure("Role assignment failed due to a database error.", ErrorCodes.DatabaseError);
+        }
 
+        _logger.LogInformation("Roles assigned successfully. UserId: {UserId}, RoleCount: {RoleCount}",
+            userId, request.RoleIds.Count());
         return Result.Success();
     }
 }

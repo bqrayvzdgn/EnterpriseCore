@@ -2,30 +2,31 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
+using EnterpriseCore.Application.Common.Settings;
 using EnterpriseCore.Application.Interfaces;
 using EnterpriseCore.Domain.Entities;
+using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 
 namespace EnterpriseCore.API.Services;
 
 public class TokenService : ITokenService
 {
-    private readonly IConfiguration _configuration;
+    private readonly JwtSettings _jwtSettings;
     private readonly ILogger<TokenService> _logger;
 
-    public TokenService(IConfiguration configuration, ILogger<TokenService> logger)
+    public TokenService(IOptions<JwtSettings> jwtSettings, ILogger<TokenService> logger)
     {
-        _configuration = configuration;
+        _jwtSettings = jwtSettings.Value;
         _logger = logger;
     }
 
     public string GenerateAccessToken(User user, IEnumerable<string> permissions)
     {
-        var jwtSettings = _configuration.GetSection("JwtSettings");
-        var secretKey = jwtSettings["SecretKey"] ?? throw new InvalidOperationException("JWT SecretKey not configured");
-        var issuer = jwtSettings["Issuer"];
-        var audience = jwtSettings["Audience"];
-        var expirationMinutes = int.Parse(jwtSettings["ExpirationMinutes"] ?? "60");
+        var secretKey = _jwtSettings.SecretKey;
+        var issuer = _jwtSettings.Issuer;
+        var audience = _jwtSettings.Audience;
+        var expirationMinutes = _jwtSettings.ExpirationMinutes;
 
         var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey));
         var credentials = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
@@ -65,11 +66,8 @@ public class TokenService : ITokenService
 
     public (Guid UserId, Guid TenantId)? ValidateToken(string token)
     {
-        var jwtSettings = _configuration.GetSection("JwtSettings");
-        var secretKey = jwtSettings["SecretKey"] ?? throw new InvalidOperationException("JWT SecretKey not configured");
-
         var tokenHandler = new JwtSecurityTokenHandler();
-        var key = Encoding.UTF8.GetBytes(secretKey);
+        var key = Encoding.UTF8.GetBytes(_jwtSettings.SecretKey);
 
         try
         {
@@ -78,9 +76,9 @@ public class TokenService : ITokenService
                 ValidateIssuerSigningKey = true,
                 IssuerSigningKey = new SymmetricSecurityKey(key),
                 ValidateIssuer = true,
-                ValidIssuer = jwtSettings["Issuer"],
+                ValidIssuer = _jwtSettings.Issuer,
                 ValidateAudience = true,
-                ValidAudience = jwtSettings["Audience"],
+                ValidAudience = _jwtSettings.Audience,
                 ValidateLifetime = true,
                 ClockSkew = TimeSpan.Zero
             }, out _);
@@ -93,9 +91,17 @@ public class TokenService : ITokenService
                 return (Guid.Parse(userId), Guid.Parse(tenantId));
             }
         }
+        catch (SecurityTokenExpiredException)
+        {
+            _logger.LogWarning("Token validation failed: token has expired");
+        }
+        catch (SecurityTokenInvalidSignatureException)
+        {
+            _logger.LogWarning("Token validation failed: invalid signature");
+        }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Token validation failed for provided token");
+            _logger.LogWarning(ex, "Token validation failed with unexpected error");
         }
 
         return null;

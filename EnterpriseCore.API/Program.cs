@@ -5,6 +5,7 @@ using EnterpriseCore.API.Hubs;
 using EnterpriseCore.API.Middleware;
 using EnterpriseCore.API.Services;
 using EnterpriseCore.Application;
+using EnterpriseCore.Application.Common.Settings;
 using EnterpriseCore.Application.Interfaces;
 using EnterpriseCore.Infrastructure;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -19,6 +20,48 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Host.UseSerilog((context, configuration) =>
     configuration.ReadFrom.Configuration(context.Configuration));
 
+// Configuration Validation - Environment variable fallbacks
+var jwtSecretKey = builder.Configuration["JwtSettings:SecretKey"];
+if (string.IsNullOrEmpty(jwtSecretKey))
+{
+    jwtSecretKey = Environment.GetEnvironmentVariable("JWT_SECRET_KEY");
+    if (!string.IsNullOrEmpty(jwtSecretKey))
+    {
+        builder.Configuration["JwtSettings:SecretKey"] = jwtSecretKey;
+    }
+}
+
+var dbConnectionString = builder.Configuration.GetConnectionString("DefaultConnection");
+if (string.IsNullOrEmpty(dbConnectionString))
+{
+    dbConnectionString = Environment.GetEnvironmentVariable("DATABASE_CONNECTION_STRING");
+    if (!string.IsNullOrEmpty(dbConnectionString))
+    {
+        builder.Configuration["ConnectionStrings:DefaultConnection"] = dbConnectionString;
+    }
+}
+
+var redisConnectionString = builder.Configuration.GetConnectionString("Redis");
+if (string.IsNullOrEmpty(redisConnectionString))
+{
+    redisConnectionString = Environment.GetEnvironmentVariable("REDIS_CONNECTION_STRING");
+    if (!string.IsNullOrEmpty(redisConnectionString))
+    {
+        builder.Configuration["ConnectionStrings:Redis"] = redisConnectionString;
+    }
+}
+
+// Register and validate configuration with IOptions pattern
+builder.Services.AddOptions<JwtSettings>()
+    .Bind(builder.Configuration.GetSection(JwtSettings.SectionName))
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
+
+builder.Services.AddOptions<DatabaseSettings>()
+    .Bind(builder.Configuration.GetSection(DatabaseSettings.SectionName))
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
+
 // Add services
 builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration);
@@ -32,17 +75,16 @@ builder.Services.AddScoped<IPasswordHasher, PasswordHasher>();
 // Controllers
 builder.Services.AddControllers();
 
-// JWT Authentication
-var jwtSettings = builder.Configuration.GetSection("JwtSettings");
-var secretKey = jwtSettings["SecretKey"];
-if (string.IsNullOrEmpty(secretKey))
-{
-    secretKey = Environment.GetEnvironmentVariable("JWT_SECRET_KEY");
-}
-if (string.IsNullOrEmpty(secretKey))
+// JWT Authentication - Get validated settings
+var jwtSettings = builder.Configuration.GetSection(JwtSettings.SectionName).Get<JwtSettings>()
+    ?? throw new InvalidOperationException("JWT settings are not configured properly.");
+
+if (string.IsNullOrEmpty(jwtSettings.SecretKey))
 {
     throw new InvalidOperationException("JWT SecretKey is not configured. Set it in appsettings.json or JWT_SECRET_KEY environment variable.");
 }
+
+var secretKey = jwtSettings.SecretKey;
 
 builder.Services.AddAuthentication(options =>
 {
@@ -56,9 +98,9 @@ builder.Services.AddAuthentication(options =>
         ValidateIssuerSigningKey = true,
         IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey)),
         ValidateIssuer = true,
-        ValidIssuer = jwtSettings["Issuer"] ?? "EnterpriseCore",
+        ValidIssuer = jwtSettings.Issuer,
         ValidateAudience = true,
-        ValidAudience = jwtSettings["Audience"] ?? "EnterpriseCore",
+        ValidAudience = jwtSettings.Audience,
         ValidateLifetime = true,
         ClockSkew = TimeSpan.Zero
     };

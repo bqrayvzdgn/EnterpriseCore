@@ -8,16 +8,9 @@ public class PermissionAuthorizationHandler : AuthorizationHandler<PermissionReq
         AuthorizationHandlerContext context,
         PermissionRequirement requirement)
     {
-        // Get permissions from claims
-        var permissionClaims = context.User.FindAll("permissions");
+        // Get permissions from claims - TokenService uses "permission" (singular) for each permission
+        var permissionClaims = context.User.FindAll("permission");
         var permissions = permissionClaims.Select(c => c.Value).ToList();
-
-        // Also check for a single permissions claim that might be comma-separated
-        var singlePermissionClaim = context.User.FindFirst("permissions")?.Value;
-        if (!string.IsNullOrEmpty(singlePermissionClaim))
-        {
-            permissions.AddRange(singlePermissionClaim.Split(',', StringSplitOptions.RemoveEmptyEntries));
-        }
 
         if (permissions.Contains(requirement.Permission))
         {
